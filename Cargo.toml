@@ -1,0 +1,18 @@
+[package]
+name = "gh-kanban"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal kanban board for GitHub Issues — ratatui TUI, gh CLI backend, JSON cache"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
