@@ -1,6 +1,31 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// Platform for issue hosting.
+#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
+pub enum Platform {
+    Github,
+    Gitlab,
+}
+
+impl Platform {
+    /// CLI executable name.
+    pub fn cli_name(&self) -> &'static str {
+        match self {
+            Platform::Github => "gh",
+            Platform::Gitlab => "glab",
+        }
+    }
+
+    /// Base hostname for issue URLs.
+    pub fn host(&self) -> &'static str {
+        match self {
+            Platform::Github => "github.com",
+            Platform::Gitlab => "gitlab.com",
+        }
+    }
+}
+
 /// Priority level extracted from issue labels.
 /// Supports `P0`–`P3` and `priority:0`–`priority:3` label conventions.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -45,7 +70,7 @@ impl fmt::Display for Priority {
     }
 }
 
-/// Raw issue response from `gh issue list --json`, mirroring the API shape.
+/// Raw issue response from `gh issue list --json`, mirroring the GitHub API shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GhIssue {
@@ -70,7 +95,25 @@ pub struct GhAssignee {
     pub login: String,
 }
 
-/// A processed GitHub issue with resolved labels and priority.
+/// Raw issue response from `glab issue list --output json`, mirroring the GitLab API shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlabIssue {
+    pub iid: u64,
+    pub title: String,
+    pub state: String,
+    pub labels: Vec<String>,
+    pub assignees: Vec<GlabAssignee2>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// An assignee as returned by the GitLab API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlabAssignee2 {
+    pub username: String,
+}
+
+/// A processed GitHub/GitLab issue with resolved labels and priority.
 ///
 /// Fields are flattened for direct JSON serialization — agents use this
 /// via `--json` output.
@@ -86,7 +129,7 @@ pub struct Issue {
     pub updated_at: String,
 }
 
-/// Whether a GitHub issue is open or closed.
+/// Whether an issue is open or closed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IssueState {
     Open,
@@ -125,17 +168,19 @@ pub struct Cache {
     pub issues: Vec<Issue>,
 }
 
-/// In-memory config with resolved repo and column definitions.
+/// In-memory config with resolved repo, column definitions, and platform.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub repo: String,
     pub columns: Vec<Column>,
+    pub platform: Platform,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             repo: String::new(),
+            platform: Platform::Github,
             columns: vec![
                 Column {
                     id: "todo".into(),
@@ -321,6 +366,26 @@ mod tests {
         let closed = &cfg.columns[4];
         assert!(closed.show_closed);
         assert!(closed.labels.is_empty());
+    }
+
+    #[test]
+    fn test_config_default_platform() {
+        let cfg = Config::default();
+        assert_eq!(cfg.platform, Platform::Github);
+    }
+
+    // ── Platform ──
+
+    #[test]
+    fn test_platform_cli_name() {
+        assert_eq!(Platform::Github.cli_name(), "gh");
+        assert_eq!(Platform::Gitlab.cli_name(), "glab");
+    }
+
+    #[test]
+    fn test_platform_host() {
+        assert_eq!(Platform::Github.host(), "github.com");
+        assert_eq!(Platform::Gitlab.host(), "gitlab.com");
     }
 
     // ── Issue JSON serialization ──

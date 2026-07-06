@@ -156,8 +156,8 @@ fn test_json_column_filter() {
         return;
     }
     // Fetch full list and column-filtered list to compare counts
-    let full = run_json(&[TEST_REPO]);
-    let filtered = run_json(&[TEST_REPO, "--column", "done"]);
+    let full = run_json(TEST_REPO, &[]);
+    let filtered = run_json(TEST_REPO, &["--column", "done"]);
     // Filtered should have fewer or equal issues
     let full_count = full["count"].as_u64().unwrap();
     let filtered_count = filtered["count"].as_u64().unwrap();
@@ -184,7 +184,7 @@ fn test_json_column_filter_all() {
     }
     // Filter by each default column and verify returns
     for col in &["todo", "doing", "review", "done"] {
-        let result = run_json(&[TEST_REPO, "--column", col]);
+        let result = run_json(TEST_REPO, &["--column", col]);
         assert!(
             result["issues"].as_array().unwrap().len() > 0
                 || result["count"].as_u64().unwrap() == 0,
@@ -199,7 +199,7 @@ fn test_json_fields_filter() {
         eprintln!("skipping: gh not available");
         return;
     }
-    let result = run_json(&[TEST_REPO, "--fields", "number,title,state"]);
+    let result = run_json(TEST_REPO, &["--fields", "number,title,state"]);
     for issue in result["issues"].as_array().unwrap() {
         let obj = issue.as_object().unwrap();
         // Should only have the requested fields (plus maybe more if top-level)
@@ -220,7 +220,7 @@ fn test_json_fields_single() {
         eprintln!("skipping: gh not available");
         return;
     }
-    let result = run_json(&[TEST_REPO, "--fields", "number"]);
+    let result = run_json(TEST_REPO, &["--fields", "number"]);
     for issue in result["issues"].as_array().unwrap() {
         let obj = issue.as_object().unwrap();
         assert_eq!(obj.len(), 1, "should only have 'number': {obj:?}");
@@ -267,8 +267,8 @@ fn test_summary_column_filter() {
         eprintln!("skipping: gh not available");
         return;
     }
-    let full = run_json_summary(&[TEST_REPO]);
-    let filtered = run_json_summary(&[TEST_REPO, "--column", "doing"]);
+    let full = run_json_summary(TEST_REPO, &[]);
+    let filtered = run_json_summary(TEST_REPO, &["--column", "doing"]);
     // Filtered should return only 1 column
     assert_eq!(filtered["columns"].as_array().unwrap().len(), 1,
         "filtered summary should have 1 column");
@@ -304,14 +304,15 @@ fn test_refresh_output() {
 
 // ── Helpers ──
 
-/// Run `gh-kanban --json --repo X [--extra args]` and parse JSON.
-fn run_json(args: &[&str]) -> serde_json::Value {
-    let mut cmd = Command::new(binary_path());
-    cmd.arg("--json").arg("--repo");
-    for a in args {
-        cmd.arg(a);
-    }
-    let output = cmd.output().expect("failed to execute binary");
+/// Run `gh-kanban --json --repo X [extra args...]` and parse JSON.
+fn run_json(repo: &str, extra_args: &[&str]) -> serde_json::Value {
+    let output = Command::new(binary_path())
+        .arg("--json")
+        .arg("--repo")
+        .arg(repo)
+        .args(extra_args)
+        .output()
+        .expect("failed to execute binary");
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         panic!("gh-kanban --json failed: {stderr}");
@@ -320,14 +321,15 @@ fn run_json(args: &[&str]) -> serde_json::Value {
     serde_json::from_str(&stdout).expect("stdout should be valid JSON")
 }
 
-/// Run `gh-kanban --summary --repo X [--extra args]` and parse JSON.
-fn run_json_summary(args: &[&str]) -> serde_json::Value {
-    let mut cmd = Command::new(binary_path());
-    cmd.arg("--summary").arg("--repo");
-    for a in args {
-        cmd.arg(a);
-    }
-    let output = cmd.output().expect("failed to execute binary");
+/// Run `gh-kanban --summary --repo X [extra args...]` and parse JSON.
+fn run_json_summary(repo: &str, extra_args: &[&str]) -> serde_json::Value {
+    let output = Command::new(binary_path())
+        .arg("--summary")
+        .arg("--repo")
+        .arg(repo)
+        .args(extra_args)
+        .output()
+        .expect("failed to execute binary");
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         panic!("gh-kanban --summary failed: {stderr}");

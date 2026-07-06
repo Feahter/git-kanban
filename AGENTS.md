@@ -13,8 +13,11 @@ cargo build --release
 
 ### Read Issues (JSON)
 ```bash
-# All issues
+# All issues (GitHub — default)
 gh-kanban --json --repo owner/name
+
+# All issues (GitLab)
+gh-kanban --json --repo namespace/project --platform gitlab
 
 # Filter by column
 gh-kanban --json --repo owner/name --column todo

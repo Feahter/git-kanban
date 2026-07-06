@@ -15,27 +15,29 @@ use crossterm::{
 };
 
 #[derive(Parser)]
-#[command(name = "gh-kanban", about = "Terminal kanban board for GitHub Issues")]
+#[command(name = "gh-kanban", about = "Terminal kanban board for GitHub/GitLab Issues")]
 struct Args {
     /// Repository in owner/name format (e.g. "owner/repo")
     #[arg(short, long)]
     repo: Option<String>,
 
+    /// Platform: github or gitlab (default: github)
+    #[arg(long, value_enum, default_value_t = types::Platform::Github)]
+    platform: types::Platform,
+
     /// Output issues as JSON array and exit
     #[arg(long)]
     json: bool,
 
-    /// Refresh cache from GitHub and exit (for agent/cron use)
+    /// Refresh cache and exit (for agent/cron use)
     #[arg(long)]
     refresh: bool,
 
     /// When used with --json or --summary: filter to a specific column by ID
-    /// Column IDs: todo, doing, review, done, closed (or custom from config)
     #[arg(long)]
     column: Option<String>,
 
     /// When used with --json: comma-separated field names to include
-    /// Available: number, title, state, labels, assignees, priority, created_at, updated_at
     #[arg(long)]
     fields: Option<String>,
 
@@ -52,6 +54,7 @@ fn main() -> io::Result<()> {
     if let Some(repo) = &args.repo {
         cfg.repo = repo.clone();
     }
+    cfg.platform = args.platform;
 
     if cfg.repo.is_empty() {
         eprintln!("Error: no repository configured.");
@@ -59,9 +62,9 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
-    if let Err(e) = sync::check_gh_auth() {
+    if let Err(e) = sync::check_auth(&cfg.platform) {
         eprintln!("Error: {e}");
-        eprintln!("Run 'gh auth login' first.");
+        eprintln!("Run '{} auth login' first.", cfg.platform.cli_name());
         std::process::exit(1);
     }
 
@@ -72,7 +75,7 @@ fn main() -> io::Result<()> {
 
     // --- Summary mode ---
     if args.summary {
-        match sync::fetch_issues(&cfg.repo) {
+        match sync::fetch_issues(&cfg.repo, &cfg.platform) {
             Ok(issues) => {
                 let counts: Vec<serde_json::Value> = cfg.columns.iter()
                     .filter(|col| target_col.map_or(true, |t| col.id == t.id))
@@ -102,15 +105,13 @@ fn main() -> io::Result<()> {
 
     // --- JSON mode ---
     if args.json {
-        match sync::fetch_issues(&cfg.repo) {
+        match sync::fetch_issues(&cfg.repo, &cfg.platform) {
             Ok(issues) => {
-                // Filter by column if requested
                 let filtered: Vec<types::Issue> = match target_col {
                     Some(col) => issues.into_iter().filter(|i| col.matches(i)).collect(),
                     None => issues,
                 };
 
-                // Apply field selection
                 let field_list: Option<Vec<String>> = args.fields.as_ref().map(|f| {
                     f.split(',').map(|s| s.trim().to_string()).collect()
                 });
@@ -140,7 +141,7 @@ fn main() -> io::Result<()> {
 
     // --- Refresh mode ---
     if args.refresh {
-        match sync::fetch_issues(&cfg.repo) {
+        match sync::fetch_issues(&cfg.repo, &cfg.platform) {
             Ok(issues) => {
                 config::write_cache(&issues, &now_iso8601());
                 println!("Cached {} issues from {}", issues.len(), cfg.repo);
@@ -160,7 +161,7 @@ fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = ui::run(&mut terminal, cfg.repo, cfg.columns);
+    let result = ui::run(&mut terminal, cfg.repo, cfg.columns, cfg.platform);
 
     disable_raw_mode()?;
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
@@ -188,20 +189,22 @@ fn select_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Va
 }
 
 /// Generate an ISO 8601 UTC timestamp string without chrono dependency.
-///
-/// Uses the Howard Hinnant algorithm for leap-year-aware date conversion.
 fn now_iso8601() -> String {
-    let now = std::time::SystemTime::now()
+    let total_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let total_secs = now.as_secs();
+        .unwrap_or_default()
+        .as_secs();
+    format_ts(total_secs)
+}
 
-    let secs_of_day = total_secs % 86400;
+/// Convert seconds since epoch to ISO 8601 UTC string.
+fn format_ts(secs: u64) -> String {
+    let secs_of_day = secs % 86400;
     let hours = secs_of_day / 3600;
     let minutes = (secs_of_day % 3600) / 60;
     let seconds = secs_of_day % 60;
 
-    let (year, month, day) = days_to_date(total_secs / 86400);
+    let (year, month, day) = days_to_date(secs / 86400);
 
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
@@ -211,10 +214,9 @@ fn now_iso8601() -> String {
 
 /// Convert days since Unix epoch (1970-01-01) to (year, month, day).
 ///
-/// Algorithm by Howard Hinnant: shifts epoch to 0000-03-01 to
+/// Howard Hinnant algorithm: shifts epoch to 0000-03-01 to
 /// eliminate the leap-day complexity from month computation.
 fn days_to_date(days: u64) -> (u32, u32, u32) {
-    // Shift epoch from 1970-01-01 to 0000-03-01
     let z = days + 719468;
     let era = z / 146097;
     let doe = z - era * 146097;           // day of era [0, 146096]
@@ -223,7 +225,7 @@ fn days_to_date(days: u64) -> (u32, u32, u32) {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
     let mp = (5 * doy + 2) / 153;                      // month phase [0, 11]
     let d = doy - (153 * mp + 2) / 5 + 1;              // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };     // [1, 12]
     let y = y + (if m <= 2 { 1 } else { 0 });
     (y as u32, m as u32, d as u32)
 }
@@ -231,8 +233,6 @@ fn days_to_date(days: u64) -> (u32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── now_iso8601 ──
 
     #[test]
     fn test_now_iso8601_format() {
@@ -245,67 +245,40 @@ mod tests {
     }
 
     #[test]
-    fn test_now_iso8601_epoch() {
-        // Simulate epoch: Jan 1 1970 00:00:00
-        let ts = format_ts(0);
-        assert_eq!(ts, "1970-01-01T00:00:00Z", "epoch failed: {ts}");
+    fn test_format_ts_epoch() {
+        assert_eq!(format_ts(0), "1970-01-01T00:00:00Z");
     }
 
     #[test]
-    fn test_now_iso8601_leap_year_march() {
-        // 2024 is leap. March 1 = day 61 (1-indexed: Jan 31 + Feb 29)
-        // Days from 1970-01-01 to 2024-03-01:
-        // 54 years * 365 + 13 leap days + 31(Jan) + 29(Feb) = 19710 + 13 + 60 = 19783
-        let ts = format_ts(19783 * 86400);
-        assert_eq!(&ts[0..10], "2024-03-01", "leap year march failed: {ts}");
+    fn test_format_ts_leap_year_march() {
+        // 2024-03-01 00:00:00 UTC = 19783 days after epoch
+        assert_eq!(&format_ts(19783 * 86400)[..10], "2024-03-01");
     }
 
     #[test]
-    fn test_now_iso8601_2000_leap() {
-        // 2000 is leap (divisible by 400). March 1.
-        // 1970..1999 = 30 years. Leap: 1972..1996 = 7 (but 2000? no, 2000 is in)
-        // No wait: days from 1970-01-01 to 2000-03-01
-        // 1970-1999: 30 years * 365 = 10950 + 7 leap days (72,76,80,84,88,92,96)
-        // Jan 2000: 31 days, Feb 2000: 29 days (leap) = 60 days
-        // total = 10950 + 7 + 60 = 11017 days
-        let ts = format_ts(11017 * 86400);
-        assert_eq!(&ts[0..10], "2000-03-01", "2000-03-01 failed: {ts}");
+    fn test_format_ts_2000_march() {
+        // 2000-03-01 (century leap year)
+        assert_eq!(&format_ts(11017 * 86400)[..10], "2000-03-01");
     }
 
     #[test]
-    fn test_now_iso8601_non_leap_feb() {
-        // 2023 not leap. Feb 14
-        // 1970..2022: 53 years. Leap: 1972..2020 = 13
-        // days = 53*365 + 13 + 31(Jan) + 13(Feb 14) = 19345 + 13 + 44 = 19402
-        let days_since_epoch: u64 = 19402;
-        let ts = format_ts(days_since_epoch * 86400);
-        assert_eq!(&ts[0..10], "2023-02-14", "2023-02-14 failed: {ts}");
+    fn test_format_ts_feb_non_leap() {
+        // 2023-02-14
+        assert_eq!(&format_ts(19402 * 86400)[..10], "2023-02-14");
     }
 
     #[test]
-    fn test_now_iso8601_dec_31() {
-        // 2025-12-31. 1970..2024 = 55 years. Leap: 1972..2024 = 14 (2000 yes)
-        // 2025 not leap. Dec 31 = day 365 (no leap day in 2025)
-        // days = 55*365 + 14 + 364 = 20075 + 14 + 364 = 20453
-        // Actually: days from 1970 to 2025-01-01 = 55*365+14 = 20089
-        // Add 364 days = 20453. Let's try it.
-        let ts = format_ts(20453 * 86400);
-        assert_eq!(&ts[0..10], "2025-12-31", "2025-12-31 failed: {ts}");
+    fn test_format_ts_dec_31() {
+        // 2025-12-31
+        assert_eq!(&format_ts(20453 * 86400)[..10], "2025-12-31");
     }
 
-    /// Helper: format a specific unix timestamp for deterministic testing.
-    fn format_ts(secs: u64) -> String {
-        let secs_of_day = secs % 86400;
-        let hours = secs_of_day / 3600;
-        let minutes = (secs_of_day % 3600) / 60;
-        let seconds = secs_of_day % 60;
-
-        let (year, month, day) = days_to_date(secs / 86400);
-
-        format!(
-            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-            year, month, day, hours, minutes, seconds
-        )
+    #[test]
+    fn test_format_ts_time_component() {
+        // 2023-06-15 14:30:45
+        // Days: 19523, Seconds offset: 14*3600+30*60+45 = 52245
+        let ts = format_ts(19523 * 86400 + 52245);
+        assert_eq!(ts, "2023-06-15T14:30:45Z");
     }
 
     // ── select_fields ──
@@ -333,30 +306,19 @@ mod tests {
     }
 
     #[test]
-    fn test_select_fields_empty_list() {
+    fn test_select_fields_empty() {
         let v = serde_json::json!({"a": 1, "b": 2});
-        let result = select_fields(&v, &[]);
-        assert!(result.as_object().unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_select_fields_nonexistent() {
-        let v = serde_json::json!({"a": 1});
-        let result = select_fields(&v, &["z".into()]);
-        assert!(result.as_object().unwrap().is_empty());
+        assert!(select_fields(&v, &[]).as_object().unwrap().is_empty());
     }
 
     #[test]
     fn test_select_fields_scalar() {
         let v = serde_json::json!("hello");
-        let result = select_fields(&v, &["anything".into()]);
-        assert_eq!(result, "hello");
+        assert_eq!(select_fields(&v, &["x".into()]), "hello");
     }
 
     #[test]
     fn test_select_fields_null() {
-        let v = serde_json::json!(null);
-        let result = select_fields(&v, &["x".into()]);
-        assert_eq!(result, serde_json::Value::Null);
+        assert_eq!(select_fields(&serde_json::json!(null), &["x".into()]), serde_json::Value::Null);
     }
 }

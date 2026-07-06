@@ -10,10 +10,11 @@ use ratatui::{
 };
 
 use crate::sync;
-use crate::types::{Column, Issue, IssueState, Priority};
+use crate::types::{Column, Issue, IssueState, Platform, Priority};
 
 pub struct App {
     pub repo: String,
+    pub platform: Platform,
     pub columns: Vec<Column>,
     pub selected_col: usize,
     pub status_msg: String,
@@ -22,9 +23,10 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(repo: String, columns: Vec<Column>) -> Self {
+    pub fn new(repo: String, columns: Vec<Column>, platform: Platform) -> Self {
         App {
             repo,
+            platform,
             columns,
             selected_col: 0,
             status_msg: String::new(),
@@ -46,12 +48,13 @@ pub fn run(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     repo: String,
     mut columns: Vec<Column>,
+    platform: Platform,
 ) -> io::Result<()> {
-    let mut app = App::new(repo, columns.clone());
+    let mut app = App::new(repo, columns.clone(), platform);
     let mut col_issues: Vec<Vec<Issue>> = columns.iter().map(|_| vec![]).collect();
     let mut selected_row: usize = 0;
 
-    match sync::fetch_issues(&app.repo) {
+    match sync::fetch_issues(&app.repo, &app.platform) {
         Ok(issues) => {
             crate::config::write_cache(&issues, "now");
             for (i, col) in app.columns.iter_mut().enumerate() {
@@ -117,7 +120,7 @@ pub fn run(
                     app.status_msg = "Refreshing...".into();
                     terminal.draw(|f| draw(f, &mut app, selected_row))?;
 
-                    match sync::fetch_issues(&app.repo) {
+                    match sync::fetch_issues(&app.repo, &app.platform) {
                         Ok(issues) => {
                             crate::config::write_cache(&issues, "now");
                             for (i, col) in app.columns.iter_mut().enumerate() {
@@ -136,7 +139,7 @@ pub fn run(
                     if let Some(col) = app.columns.get(app.selected_col) {
                         if selected_row < col.issues.len() {
                             let issue = &col.issues[selected_row];
-                            sync::open_in_browser(&app.repo, issue.number);
+                            sync::open_in_browser(&app.repo, issue.number, &app.platform);
                             app.status_msg = format!("#{} opened in browser", issue.number);
                         }
                     }
@@ -163,7 +166,7 @@ pub fn run(
                         match sync::create_issue(&app.repo, &title, &default_labels) {
                             Ok(num) => {
                                 app.status_msg = format!("#{} created", num);
-                                if let Ok(issues) = sync::fetch_issues(&app.repo) {
+                                if let Ok(issues) = sync::fetch_issues(&app.repo, &app.platform) {
                                     for (i, col) in app.columns.iter_mut().enumerate() {
                                         col.issues = issues.iter().filter(|issue| col.matches(issue)).cloned().collect();
                                     }
@@ -184,7 +187,7 @@ pub fn run(
                                 match sync::close_issue(&app.repo, issue.number) {
                                     Ok(()) => {
                                         app.status_msg = format!("#{} closed", issue.number);
-                                        if let Ok(issues) = sync::fetch_issues(&app.repo) {
+                                        if let Ok(issues) = sync::fetch_issues(&app.repo, &app.platform) {
                                             for (i, col) in app.columns.iter_mut().enumerate() {
                                                 col.issues = issues.iter().filter(|issue| col.matches(issue)).cloned().collect();
                                             }
@@ -212,7 +215,7 @@ pub fn run(
                                     sync::add_label(&app.repo, issue.number, lbl).ok();
                                 }
                                 app.status_msg = format!("#{} moved to {}", issue.number, next_col.title);
-                                if let Ok(issues) = sync::fetch_issues(&app.repo) {
+                                if let Ok(issues) = sync::fetch_issues(&app.repo, &app.platform) {
                                     for (i, c) in app.columns.iter_mut().enumerate() {
                                         c.issues = issues.iter().filter(|issue| c.matches(issue)).cloned().collect();
                                     }
