@@ -135,6 +135,8 @@ fn test_json_output_structure() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .expect("stdout should be valid JSON");
     assert!(parsed.get("repo").is_some(), "JSON should have 'repo' field");
+    // Note: --json now uses "total" (not "count") for consistency with --summary
+    assert!(parsed.get("total").is_some(), "JSON should have 'total' field");
     let issues = parsed["issues"]
         .as_array()
         .expect("'issues' should be an array");
@@ -159,8 +161,8 @@ fn test_json_column_filter() {
     let full = run_json(TEST_REPO, &[]);
     let filtered = run_json(TEST_REPO, &["--column", "done"]);
     // Filtered should have fewer or equal issues
-    let full_count = full["count"].as_u64().unwrap();
-    let filtered_count = filtered["count"].as_u64().unwrap();
+    let full_count = full["total"].as_u64().unwrap();
+    let filtered_count = filtered["total"].as_u64().unwrap();
     assert!(filtered_count <= full_count,
         "filtered ({filtered_count}) should be <= full ({full_count})");
     // All filtered issues should have "done" or "status:done" label
@@ -187,7 +189,7 @@ fn test_json_column_filter_all() {
         let result = run_json(TEST_REPO, &["--column", col]);
         assert!(
             result["issues"].as_array().unwrap().len() > 0
-                || result["count"].as_u64().unwrap() == 0,
+                || result["total"].as_u64().unwrap() == 0,
             "column '{col}' should not produce errors"
         );
     }

@@ -13,8 +13,11 @@ cargo build --release
 
 ### Read Issues (JSON)
 ```bash
-# All issues (GitHub — default)
+# All issues (live — calls gh/glab)
 gh-kanban --json --repo owner/name
+
+# From local cache (instant, <10ms, may be stale)
+gh-kanban --json --repo owner/name --cached
 
 # All issues (GitLab)
 gh-kanban --json --repo namespace/project --platform gitlab

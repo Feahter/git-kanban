@@ -25,13 +25,17 @@ struct Args {
     #[arg(long, value_enum, default_value_t = types::Platform::Github)]
     platform: types::Platform,
 
-    /// Output issues as JSON array and exit
+    /// Output issues as JSON and exit
     #[arg(long)]
     json: bool,
 
-    /// Refresh cache and exit (for agent/cron use)
+    /// Refresh cache from platform and exit (for agent/cron use)
     #[arg(long)]
     refresh: bool,
+
+    /// Read from cache instead of hitting the network (faster, may be stale)
+    #[arg(long)]
+    cached: bool,
 
     /// When used with --json or --summary: filter to a specific column by ID
     #[arg(long)]
@@ -49,7 +53,6 @@ struct Args {
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
-    // Load config and resolve repo
     let mut cfg = config::load();
     if let Some(repo) = &args.repo {
         cfg.repo = repo.clone();
@@ -62,10 +65,12 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
-    if let Err(e) = sync::check_auth(&cfg.platform) {
-        eprintln!("Error: {e}");
-        eprintln!("Run '{} auth login' first.", cfg.platform.cli_name());
-        std::process::exit(1);
+    if !args.cached {
+        if let Err(e) = sync::check_auth(&cfg.platform) {
+            eprintln!("Error: {e}");
+            eprintln!("Run '{} auth login' first.", cfg.platform.cli_name());
+            std::process::exit(1);
+        }
     }
 
     // Resolve column filter
@@ -73,69 +78,62 @@ fn main() -> io::Result<()> {
         cfg.columns.iter().find(|c| c.id == *name)
     });
 
+    // Fetch issues: live or cached
+    let issues = match resolve_issues(&cfg.repo, &cfg.platform, args.cached) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
     // --- Summary mode ---
     if args.summary {
-        match sync::fetch_issues(&cfg.repo, &cfg.platform) {
-            Ok(issues) => {
-                let counts: Vec<serde_json::Value> = cfg.columns.iter()
-                    .filter(|col| target_col.map_or(true, |t| col.id == t.id))
-                    .map(|col| {
-                        let count = issues.iter().filter(|i| col.matches(i)).count();
-                        serde_json::json!({
-                            "id": col.id,
-                            "title": col.title,
-                            "count": count,
-                        })
-                    })
-                    .collect();
-                let json = serde_json::to_string_pretty(&serde_json::json!({
-                    "repo": cfg.repo,
-                    "total": issues.len(),
-                    "columns": counts,
-                })).unwrap_or_default();
-                println!("{json}");
-            }
-            Err(e) => {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
-        }
+        let counts: Vec<serde_json::Value> = cfg.columns.iter()
+            .filter(|col| target_col.map_or(true, |t| col.id == t.id))
+            .map(|col| {
+                let count = issues.iter().filter(|i| col.matches(i)).count();
+                serde_json::json!({
+                    "id": col.id,
+                    "title": col.title,
+                    "count": count,
+                })
+            })
+            .collect();
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "repo": cfg.repo,
+            "total": issues.len(),
+            "columns": counts,
+        })).unwrap_or_default();
+        println!("{json}");
         return Ok(());
     }
 
     // --- JSON mode ---
     if args.json {
-        match sync::fetch_issues(&cfg.repo, &cfg.platform) {
-            Ok(issues) => {
-                let filtered: Vec<types::Issue> = match target_col {
-                    Some(col) => issues.into_iter().filter(|i| col.matches(i)).collect(),
-                    None => issues,
-                };
+        let filtered: Vec<types::Issue> = match target_col {
+            Some(col) => issues.into_iter().filter(|i| col.matches(i)).collect(),
+            None => issues,
+        };
 
-                let field_list: Option<Vec<String>> = args.fields.as_ref().map(|f| {
-                    f.split(',').map(|s| s.trim().to_string()).collect()
-                });
+        let field_list: Option<Vec<String>> = args.fields.as_ref().map(|f| {
+            f.split(',').map(|s| s.trim().to_string()).collect()
+        });
 
-                let issues_json: Vec<serde_json::Value> = filtered.iter().map(|issue| {
-                    let mut v = serde_json::json!(issue);
-                    if let Some(fields) = &field_list {
-                        v = select_fields(&v, fields);
-                    }
-                    v
-                }).collect();
-
-                let json = serde_json::to_string_pretty(&serde_json::json!({
-                    "repo": cfg.repo,
-                    "count": filtered.len(),
-                    "issues": issues_json,
-                })).unwrap_or_default();
-                println!("{json}");
+        let issues_json: Vec<serde_json::Value> = filtered.iter().map(|issue| {
+            let mut v = serde_json::json!(issue);
+            if let Some(fields) = &field_list {
+                v = select_fields(&v, fields);
             }
-            Err(e) => {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
-        }
+            v
+        }).collect();
+
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "repo": cfg.repo,
+            "total": filtered.len(),
+            "issues": issues_json,
+        })).unwrap_or_default();
+        println!("{json}");
         return Ok(());
     }
 
@@ -170,6 +168,16 @@ fn main() -> io::Result<()> {
     result
 }
 
+/// Fetch issues from live network or local cache.
+fn resolve_issues(repo: &str, platform: &types::Platform, cached: bool) -> Result<Vec<types::Issue>, String> {
+    if cached {
+        config::read_cache()
+            .ok_or_else(|| "No cache found. Run without --cached first, or use --refresh to populate the cache.".into())
+    } else {
+        sync::fetch_issues(repo, platform)
+    }
+}
+
 /// Keep only the requested fields from a JSON value (recursive for objects).
 fn select_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Value {
     match value {
@@ -189,7 +197,7 @@ fn select_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Va
 }
 
 /// Generate an ISO 8601 UTC timestamp string without chrono dependency.
-fn now_iso8601() -> String {
+pub(crate) fn now_iso8601() -> String {
     let total_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -251,32 +259,26 @@ mod tests {
 
     #[test]
     fn test_format_ts_leap_year_march() {
-        // 2024-03-01 00:00:00 UTC = 19783 days after epoch
         assert_eq!(&format_ts(19783 * 86400)[..10], "2024-03-01");
     }
 
     #[test]
     fn test_format_ts_2000_march() {
-        // 2000-03-01 (century leap year)
         assert_eq!(&format_ts(11017 * 86400)[..10], "2000-03-01");
     }
 
     #[test]
     fn test_format_ts_feb_non_leap() {
-        // 2023-02-14
         assert_eq!(&format_ts(19402 * 86400)[..10], "2023-02-14");
     }
 
     #[test]
     fn test_format_ts_dec_31() {
-        // 2025-12-31
         assert_eq!(&format_ts(20453 * 86400)[..10], "2025-12-31");
     }
 
     #[test]
     fn test_format_ts_time_component() {
-        // 2023-06-15 14:30:45
-        // Days: 19523, Seconds offset: 14*3600+30*60+45 = 52245
         let ts = format_ts(19523 * 86400 + 52245);
         assert_eq!(ts, "2023-06-15T14:30:45Z");
     }
