@@ -15,7 +15,11 @@ use crossterm::{
 };
 
 #[derive(Parser)]
-#[command(name = "gh-kanban", about = "Terminal kanban board for GitHub/GitLab Issues")]
+#[command(
+    name = "gh-kanban",
+    version = "0.1.0",
+    about = "Terminal kanban board for GitHub/GitLab Issues"
+)]
 struct Args {
     /// Repository in owner/name format (e.g. "owner/repo")
     #[arg(short, long)]
@@ -141,7 +145,7 @@ fn main() -> io::Result<()> {
     if args.refresh {
         match sync::fetch_issues(&cfg.repo, &cfg.platform) {
             Ok(issues) => {
-                config::write_cache(&issues, &now_iso8601());
+                config::write_cache(&cfg.repo, &issues, &now_iso8601());
                 println!("Cached {} issues from {}", issues.len(), cfg.repo);
             }
             Err(e) => {
@@ -171,7 +175,7 @@ fn main() -> io::Result<()> {
 /// Fetch issues from live network or local cache.
 fn resolve_issues(repo: &str, platform: &types::Platform, cached: bool) -> Result<Vec<types::Issue>, String> {
     if cached {
-        config::read_cache()
+        config::read_cache(repo)
             .ok_or_else(|| "No cache found. Run without --cached first, or use --refresh to populate the cache.".into())
     } else {
         sync::fetch_issues(repo, platform)

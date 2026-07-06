@@ -36,7 +36,6 @@ pub fn load() -> Config {
     let path = config_path();
 
     if !path.exists() {
-        // First run: create default config and exit
         std::fs::create_dir_all(config_dir()).ok();
         let default = Config::default();
         let json = serde_json::to_string_pretty(&serde_json::json!({
@@ -68,7 +67,6 @@ pub fn load() -> Config {
         }
     }
 
-    // Allow custom column labels via config
     if let Some(cols) = parsed.get("columns").and_then(|v| v.as_object()) {
         for col in cfg.columns.iter_mut() {
             if let Some(overrides) = cols.get(&col.id).and_then(|v| v.as_array()) {
@@ -86,28 +84,36 @@ pub fn load() -> Config {
     cfg
 }
 
-pub fn write_cache(issues: &[crate::types::Issue], last_sync: &str) {
+/// Write a repo-scoped cache. The cache JSON carries the repo name so
+/// that `read_cache` can reject stale data from a different repo.
+pub fn write_cache(repo: &str, issues: &[crate::types::Issue], last_sync: &str) {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).ok();
     let path = dir.join("issues.json");
-
     let data = serde_json::json!({
+        "repo": repo,
         "last_sync": last_sync,
         "issues": issues,
     });
-
     if let Ok(json) = serde_json::to_string_pretty(&data) {
         std::fs::write(&path, &json).ok();
     }
 }
 
-pub fn read_cache() -> Option<Vec<crate::types::Issue>> {
+/// Read cached issues for a specific repo.
+/// Returns `None` if no cache exists or the cache belongs to a different repo.
+pub fn read_cache(repo: &str) -> Option<Vec<crate::types::Issue>> {
     let path = cache_file_path();
     if !path.exists() {
         return None;
     }
     let content = std::fs::read_to_string(path).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+    // Verify cache belongs to this repo — prevent cross-repo data pollution
+    let cached_repo = parsed.get("repo")?.as_str()?;
+    if cached_repo != repo {
+        return None;
+    }
     let issues: Vec<crate::types::Issue> = serde_json::from_value(parsed.get("issues")?.clone()).ok()?;
     Some(issues)
 }
