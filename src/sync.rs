@@ -89,11 +89,23 @@ pub fn create_issue(repo: &str, title: &str, labels: &[String]) -> Result<u64, S
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     // gh returns URL like https://github.com/owner/repo/issues/123
-    if let Some(num_str) = stdout.trim().rsplit('/').next() {
-        num_str.parse::<u64>().map_err(|_| "Failed to parse issue number".into())
+    parse_issue_url(stdout.trim())
+}
+
+/// Extract the issue number from a `gh issue create` URL.
+///
+/// URL format: `https://github.com/owner/repo/issues/123`
+pub fn parse_issue_url(url: &str) -> Result<u64, String> {
+    if let Some(num_str) = url.trim().rsplit('/').next() {
+        num_str.parse::<u64>().map_err(|_| format!("Failed to parse issue number from: {url}"))
     } else {
-        Err("Unexpected gh output".into())
+        Err(format!("Unexpected gh output: {url}"))
     }
+}
+
+/// Build the GitHub URL for an issue (without opening the browser).
+pub fn issue_url(repo: &str, number: u64) -> String {
+    format!("https://github.com/{}/issues/{}", repo, number)
 }
 
 /// Close an issue via `gh issue close`.
@@ -139,7 +151,38 @@ fn run_gh_cmd(args: &[&str]) -> Result<(), String> {
 
 /// Open an issue page in the default browser (macOS `open` command).
 pub fn open_in_browser(repo: &str, number: u64) {
-    let url = format!("https://github.com/{}/issues/{}", repo, number);
-    // macOS `open` command
-    Command::new("open").arg(&url).output().ok();
+    Command::new("open").arg(&issue_url(repo, number)).output().ok();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_issue_url_normal() {
+        let url = "https://github.com/owner/repo/issues/42";
+        assert_eq!(parse_issue_url(url), Ok(42));
+    }
+
+    #[test]
+    fn test_parse_issue_url_with_newline() {
+        let url = "https://github.com/owner/repo/issues/123\n";
+        assert_eq!(parse_issue_url(url), Ok(123));
+    }
+
+    #[test]
+    fn test_parse_issue_url_invalid() {
+        assert!(parse_issue_url("not-a-url").is_err());
+    }
+
+    #[test]
+    fn test_parse_issue_url_empty() {
+        assert!(parse_issue_url("").is_err());
+    }
+
+    #[test]
+    fn test_issue_url_format() {
+        let url = issue_url("owner/repo", 42);
+        assert_eq!(url, "https://github.com/owner/repo/issues/42");
+    }
 }

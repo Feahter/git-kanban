@@ -189,7 +189,7 @@ fn select_fields(value: &serde_json::Value, fields: &[String]) -> serde_json::Va
 
 /// Generate an ISO 8601 UTC timestamp string without chrono dependency.
 ///
-/// Uses a leap-year-aware algorithm for correct date formatting.
+/// Uses the Howard Hinnant algorithm for leap-year-aware date conversion.
 fn now_iso8601() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -201,57 +201,114 @@ fn now_iso8601() -> String {
     let minutes = (secs_of_day % 3600) / 60;
     let seconds = secs_of_day % 60;
 
-    // Days since epoch (including leap year correction)
-    let mut days = total_secs / 86400;
-
-    // Number of leap days from 1970 to today
-    let y400 = days / 146097;       // 400-year cycles
-    days %= 146097;
-    let y100 = days / 36524;        // 100-year cycles within the 400
-    days %= 36524;
-    let y4   = days / 1461;         // 4-year cycles within the 100
-    days %= 1461;
-    let y1   = days / 365;          // 1-year cycles within the 4
-    days %= 365;
-
-    let year = 1970 + (y400 * 400 + y100 * 100 + y4 * 4 + y1) as u32;
-    // Leap year check
-    let is_leap = |y: u32| (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
-    // If we're past Feb 28 in a leap year, day-of-year is off by one
-    let day_of_year = if y1 > 0 && days > 59 && is_leap(year) { days + 1 } else { days };
-
-    let month_days: [u64; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut remaining = day_of_year;
-    let mut month = 1u32;
-    for &md in &month_days {
-        let bound = if month == 2 && is_leap(year) { md + 1 } else { md };
-        if remaining < bound {
-            break;
-        }
-        remaining -= bound;
-        month += 1;
-    }
+    let (year, month, day) = days_to_date(total_secs / 86400);
 
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, remaining + 1, hours, minutes, seconds
+        year, month, day, hours, minutes, seconds
     )
+}
+
+/// Convert days since Unix epoch (1970-01-01) to (year, month, day).
+///
+/// Algorithm by Howard Hinnant: shifts epoch to 0000-03-01 to
+/// eliminate the leap-day complexity from month computation.
+fn days_to_date(days: u64) -> (u32, u32, u32) {
+    // Shift epoch from 1970-01-01 to 0000-03-01
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;           // day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153;                      // month phase [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1;              // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = y + (if m <= 2 { 1 } else { 0 });
+    (y as u32, m as u32, d as u32)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // ── now_iso8601 ──
+
     #[test]
     fn test_now_iso8601_format() {
         let ts = now_iso8601();
-        // Should match ISO 8601: YYYY-MM-DDTHH:MM:SSZ
         assert!(ts.len() == 20, "Expected 20-char ISO8601, got: {ts}");
         assert!(ts.ends_with('Z'), "Expected Z suffix");
         assert_eq!(&ts[4..5], "-", "Expected dash at pos 4");
         assert_eq!(&ts[7..8], "-", "Expected dash at pos 7");
         assert_eq!(&ts[10..11], "T", "Expected T at pos 10");
     }
+
+    #[test]
+    fn test_now_iso8601_epoch() {
+        // Simulate epoch: Jan 1 1970 00:00:00
+        let ts = format_ts(0);
+        assert_eq!(ts, "1970-01-01T00:00:00Z", "epoch failed: {ts}");
+    }
+
+    #[test]
+    fn test_now_iso8601_leap_year_march() {
+        // 2024 is leap. March 1 = day 61 (1-indexed: Jan 31 + Feb 29)
+        // Days from 1970-01-01 to 2024-03-01:
+        // 54 years * 365 + 13 leap days + 31(Jan) + 29(Feb) = 19710 + 13 + 60 = 19783
+        let ts = format_ts(19783 * 86400);
+        assert_eq!(&ts[0..10], "2024-03-01", "leap year march failed: {ts}");
+    }
+
+    #[test]
+    fn test_now_iso8601_2000_leap() {
+        // 2000 is leap (divisible by 400). March 1.
+        // 1970..1999 = 30 years. Leap: 1972..1996 = 7 (but 2000? no, 2000 is in)
+        // No wait: days from 1970-01-01 to 2000-03-01
+        // 1970-1999: 30 years * 365 = 10950 + 7 leap days (72,76,80,84,88,92,96)
+        // Jan 2000: 31 days, Feb 2000: 29 days (leap) = 60 days
+        // total = 10950 + 7 + 60 = 11017 days
+        let ts = format_ts(11017 * 86400);
+        assert_eq!(&ts[0..10], "2000-03-01", "2000-03-01 failed: {ts}");
+    }
+
+    #[test]
+    fn test_now_iso8601_non_leap_feb() {
+        // 2023 not leap. Feb 14
+        // 1970..2022: 53 years. Leap: 1972..2020 = 13
+        // days = 53*365 + 13 + 31(Jan) + 13(Feb 14) = 19345 + 13 + 44 = 19402
+        let days_since_epoch: u64 = 19402;
+        let ts = format_ts(days_since_epoch * 86400);
+        assert_eq!(&ts[0..10], "2023-02-14", "2023-02-14 failed: {ts}");
+    }
+
+    #[test]
+    fn test_now_iso8601_dec_31() {
+        // 2025-12-31. 1970..2024 = 55 years. Leap: 1972..2024 = 14 (2000 yes)
+        // 2025 not leap. Dec 31 = day 365 (no leap day in 2025)
+        // days = 55*365 + 14 + 364 = 20075 + 14 + 364 = 20453
+        // Actually: days from 1970 to 2025-01-01 = 55*365+14 = 20089
+        // Add 364 days = 20453. Let's try it.
+        let ts = format_ts(20453 * 86400);
+        assert_eq!(&ts[0..10], "2025-12-31", "2025-12-31 failed: {ts}");
+    }
+
+    /// Helper: format a specific unix timestamp for deterministic testing.
+    fn format_ts(secs: u64) -> String {
+        let secs_of_day = secs % 86400;
+        let hours = secs_of_day / 3600;
+        let minutes = (secs_of_day % 3600) / 60;
+        let seconds = secs_of_day % 60;
+
+        let (year, month, day) = days_to_date(secs / 86400);
+
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            year, month, day, hours, minutes, seconds
+        )
+    }
+
+    // ── select_fields ──
 
     #[test]
     fn test_select_fields() {
@@ -273,5 +330,33 @@ mod tests {
         let arr = result["items"].as_array().unwrap();
         assert_eq!(arr[0]["a"], 1);
         assert!(arr[0].get("b").is_none());
+    }
+
+    #[test]
+    fn test_select_fields_empty_list() {
+        let v = serde_json::json!({"a": 1, "b": 2});
+        let result = select_fields(&v, &[]);
+        assert!(result.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_select_fields_nonexistent() {
+        let v = serde_json::json!({"a": 1});
+        let result = select_fields(&v, &["z".into()]);
+        assert!(result.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_select_fields_scalar() {
+        let v = serde_json::json!("hello");
+        let result = select_fields(&v, &["anything".into()]);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_select_fields_null() {
+        let v = serde_json::json!(null);
+        let result = select_fields(&v, &["x".into()]);
+        assert_eq!(result, serde_json::Value::Null);
     }
 }
