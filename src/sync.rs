@@ -1,6 +1,10 @@
 use std::process::Command;
 use crate::types::{GhIssue, Issue, IssueState, Priority};
 
+/// Fetch all issues (open + closed) from a GitHub repo via `gh issue list`.
+///
+/// Returns up to 200 issues with their labels and assignees already resolved
+/// into string lists. Requires `gh` to be installed and authenticated.
 pub fn fetch_issues(repo: &str) -> Result<Vec<Issue>, String> {
     let output = Command::new("gh")
         .args([
@@ -46,6 +50,9 @@ pub fn fetch_issues(repo: &str) -> Result<Vec<Issue>, String> {
     Ok(issues)
 }
 
+/// Check that `gh` is installed and authenticated.
+///
+/// Returns `"ok"` on success, or an error message describing the issue.
 pub fn check_gh_auth() -> Result<String, String> {
     let output = Command::new("gh")
         .args(["auth", "status"])
@@ -59,6 +66,10 @@ pub fn check_gh_auth() -> Result<String, String> {
     Ok("ok".into())
 }
 
+/// Create a new issue via `gh issue create`.
+///
+/// Returns the new issue number on success. The issue inherits the first
+/// label from `labels` if any are provided.
 pub fn create_issue(repo: &str, title: &str, labels: &[String]) -> Result<u64, String> {
     let mut cmd = Command::new("gh");
     cmd.args(["issue", "create", "--repo", repo, "--title", title]);
@@ -85,14 +96,17 @@ pub fn create_issue(repo: &str, title: &str, labels: &[String]) -> Result<u64, S
     }
 }
 
+/// Close an issue via `gh issue close`.
 pub fn close_issue(repo: &str, number: u64) -> Result<(), String> {
     run_gh_cmd(&["issue", "close", &number.to_string(), "--repo", repo])
 }
 
+/// Reopen a closed issue via `gh issue reopen`.
 pub fn reopen_issue(repo: &str, number: u64) -> Result<(), String> {
     run_gh_cmd(&["issue", "reopen", &number.to_string(), "--repo", repo])
 }
 
+/// Add a label to an issue via `gh issue edit --add-label`.
 pub fn add_label(repo: &str, number: u64, label: &str) -> Result<(), String> {
     run_gh_cmd(&[
         "issue", "edit", &number.to_string(),
@@ -101,6 +115,7 @@ pub fn add_label(repo: &str, number: u64, label: &str) -> Result<(), String> {
     ])
 }
 
+/// Remove a label from an issue via `gh issue edit --remove-label`.
 pub fn remove_label(repo: &str, number: u64, label: &str) -> Result<(), String> {
     run_gh_cmd(&[
         "issue", "edit", &number.to_string(),
@@ -122,6 +137,7 @@ fn run_gh_cmd(args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+/// Open an issue page in the default browser (macOS `open` command).
 pub fn open_in_browser(repo: &str, number: u64) {
     let url = format!("https://github.com/{}/issues/{}", repo, number);
     // macOS `open` command

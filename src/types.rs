@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// Priority level extracted from issue labels.
+/// Supports `P0`–`P3` and `priority:0`–`priority:3` label conventions.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Priority {
     P0,
@@ -10,6 +12,8 @@ pub enum Priority {
 }
 
 impl Priority {
+    /// Parse a priority from a slice of label strings.
+    /// Returns `None` if no recognised priority label is found.
     pub fn from_labels(labels: &[String]) -> Option<Self> {
         for l in labels {
             let lower = l.to_lowercase();
@@ -41,6 +45,7 @@ impl fmt::Display for Priority {
     }
 }
 
+/// Raw issue response from `gh issue list --json`, mirroring the API shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GhIssue {
     pub number: u64,
@@ -52,16 +57,22 @@ pub struct GhIssue {
     pub updated_at: String,
 }
 
+/// A label as returned by the GitHub API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GhLabel {
     pub name: String,
 }
 
+/// An assignee as returned by the GitHub API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GhAssignee {
     pub login: String,
 }
 
+/// A processed GitHub issue with resolved labels and priority.
+///
+/// Fields are flattened for direct JSON serialization — agents use this
+/// via `--json` output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
     pub number: u64,
@@ -74,12 +85,14 @@ pub struct Issue {
     pub updated_at: String,
 }
 
+/// Whether a GitHub issue is open or closed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IssueState {
     Open,
     Closed,
 }
 
+/// A kanban column that groups issues matching specific labels.
 #[derive(Debug, Clone)]
 pub struct Column {
     pub id: String,
@@ -90,6 +103,10 @@ pub struct Column {
 }
 
 impl Column {
+    /// Returns `true` if `issue` belongs in this column.
+    ///
+    /// * Closed issues belong only to columns with `show_closed: true`.
+    /// * Open issues must have at least one label matching the column's label list.
     pub fn matches(&self, issue: &Issue) -> bool {
         if issue.state == IssueState::Closed {
             return self.show_closed;
@@ -107,6 +124,7 @@ pub struct Cache {
     pub issues: Vec<Issue>,
 }
 
+/// In-memory config with resolved repo and column definitions.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub repo: String,

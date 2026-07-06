@@ -1,7 +1,7 @@
 # gh-kanban
 
 > **Terminal kanban board for GitHub Issues.**  
-> 858KB single binary. <10ms startup. Zero runtime deps. Agent-friendly JSON mode.
+> 874KB single binary. <10ms startup. Zero runtime deps. Agent-friendly JSON mode with column/field filtering.
 
 Turn your GitHub Issues into a TUI kanban board. Move cards between columns with `h`/`j`/`k`/`l`. Create, close, refresh — every operation goes through `gh` CLI, inheriting **your existing auth**. No daemon, no database, no web server, no config hell.
 
@@ -34,7 +34,7 @@ You don't need Jira. You need `gh issue list --json` rendered into columns you c
 
 | Metric | Value |
 |--------|-------|
-| Binary size | **858 KB** (single file, `strip`+`LTO`) |
+| Binary size | **874 KB** (single file, `strip`+`LTO`) |
 | Cold start | **<10ms** from JSON cache |
 | Dependencies | **4 crates** — ratatui, crossterm, serde_json, clap |
 | No async runtime | ❌ tokio |
@@ -47,13 +47,20 @@ You don't need Jira. You need `gh issue list --json` rendered into columns you c
 Built for Hermes / Claude Code / Codex agents:
 
 ```bash
-# JSON output — pipe into any agent
+# All issues as JSON
 gh-kanban --json --repo owner/name
+
+# Filter by column
+gh-kanban --json --repo owner/name --column todo
+
+# Select specific fields (reduces token waste)
+gh-kanban --json --repo owner/name --fields number,title,state,priority
+
+# Per-column count summary
+gh-kanban --summary --repo owner/name
 
 # Refresh cache silently (for cron/agent workflows)
 gh-kanban --refresh --repo owner/name
-
-# Agent reads: {"repo":"feZ/repo","count":42,"issues":[...]}
 ```
 
 Every TUI action has a corresponding `gh` CLI call, so agents can script the same operations.
@@ -166,7 +173,8 @@ Edit `~/.config/gh-kanban/config.json` to override column label mappings:
 - [x] Kanban columns with label mapping
 - [x] Priority coloring (P0–P3)
 - [x] New / close / move issues
-- [x] Agent JSON mode
+- [x] Agent JSON mode (column filter, field select, summary)
+- [x] AGENTS.md for agent tooling
 - [x] Offline cache
 - [ ] Search / filter (`/` key)
 - [ ] Issue detail view (body, comments)
