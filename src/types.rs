@@ -47,6 +47,7 @@ impl fmt::Display for Priority {
 
 /// Raw issue response from `gh issue list --json`, mirroring the API shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GhIssue {
     pub number: u64,
     pub title: String,

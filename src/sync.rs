@@ -23,31 +23,37 @@ pub fn fetch_issues(repo: &str) -> Result<Vec<Issue>, String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let gh_issues: Vec<GhIssue> = serde_json::from_str(&stdout)
-        .map_err(|e| format!("JSON parse error: {}", e))?;
+    parse_gh_response(&stdout)
+}
 
-    let issues: Vec<Issue> = gh_issues.into_iter().map(|gi| {
-        let labels: Vec<String> = gi.labels.iter().map(|l| l.name.clone()).collect();
-        let assignees: Vec<String> = gi.assignees.iter().map(|a| a.login.clone()).collect();
-        let priority = Priority::from_labels(&labels);
+/// Parse a `gh issue list --json` response string into `Issue` values.
+///
+/// Separated from `fetch_issues` so it can be unit-tested without a real `gh` call.
+pub fn parse_gh_response(json: &str) -> Result<Vec<Issue>, String> {
+    let gh_issues: Vec<GhIssue> = serde_json::from_str(json)
+        .map_err(|e| format!("JSON parse error: {e}"))?;
+    Ok(gh_issues.into_iter().map(convert_gh_issue).collect())
+}
 
-        Issue {
-            number: gi.number,
-            title: gi.title,
-            state: if gi.state == "CLOSED" || gi.state == "MERGED" {
-                IssueState::Closed
-            } else {
-                IssueState::Open
-            },
-            labels,
-            assignees,
-            priority,
-            created_at: gi.created_at,
-            updated_at: gi.updated_at,
-        }
-    }).collect();
-
-    Ok(issues)
+/// Convert a raw `GhIssue` (from GitHub API) into a processed `Issue`.
+fn convert_gh_issue(gi: GhIssue) -> Issue {
+    let labels: Vec<String> = gi.labels.iter().map(|l| l.name.clone()).collect();
+    let assignees: Vec<String> = gi.assignees.iter().map(|a| a.login.clone()).collect();
+    let priority = Priority::from_labels(&labels);
+    Issue {
+        number: gi.number,
+        title: gi.title,
+        state: if gi.state == "CLOSED" || gi.state == "MERGED" {
+            IssueState::Closed
+        } else {
+            IssueState::Open
+        },
+        labels,
+        assignees,
+        priority,
+        created_at: gi.created_at,
+        updated_at: gi.updated_at,
+    }
 }
 
 /// Check that `gh` is installed and authenticated.
@@ -158,6 +164,8 @@ pub fn open_in_browser(repo: &str, number: u64) {
 mod tests {
     use super::*;
 
+    // ── parse_issue_url / issue_url ──
+
     #[test]
     fn test_parse_issue_url_normal() {
         let url = "https://github.com/owner/repo/issues/42";
@@ -184,5 +192,119 @@ mod tests {
     fn test_issue_url_format() {
         let url = issue_url("owner/repo", 42);
         assert_eq!(url, "https://github.com/owner/repo/issues/42");
+    }
+
+    // ── parse_gh_response ──
+
+    /// A realistic gh issue list JSON response for testing.
+    fn sample_gh_response_json() -> &'static str {
+        r#"[
+  {
+    "number": 1,
+    "title": "Fix login bug",
+    "state": "OPEN",
+    "labels": [{"name": "bug"}, {"name": "p0"}],
+    "assignees": [{"login": "alice"}, {"login": "bob"}],
+    "createdAt": "2026-01-15T10:00:00Z",
+    "updatedAt": "2026-06-01T12:00:00Z"
+  },
+  {
+    "number": 42,
+    "title": "Add dark mode",
+    "state": "CLOSED",
+    "labels": [{"name": "feature"}, {"name": "p2"}],
+    "assignees": [],
+    "createdAt": "2026-03-01T08:00:00Z",
+    "updatedAt": "2026-05-15T16:30:00Z"
+  },
+  {
+    "number": 99,
+    "title": "Merged PR",
+    "state": "MERGED",
+    "labels": [],
+    "assignees": [{"login": "charlie"}],
+    "createdAt": "2026-02-10T09:00:00Z",
+    "updatedAt": "2026-02-11T09:00:00Z"
+  }
+]"#
+    }
+
+    #[test]
+    fn test_parse_gh_response_counts() {
+        let issues = parse_gh_response(sample_gh_response_json()).unwrap();
+        assert_eq!(issues.len(), 3, "should parse 3 issues");
+    }
+
+    #[test]
+    fn test_parse_gh_response_open_state() {
+        let issues = parse_gh_response(sample_gh_response_json()).unwrap();
+        let issue = &issues[0];
+        assert_eq!(issue.number, 1);
+        assert_eq!(issue.title, "Fix login bug");
+        assert_eq!(issue.state, IssueState::Open);
+    }
+
+    #[test]
+    fn test_parse_gh_response_closed_state() {
+        let issues = parse_gh_response(sample_gh_response_json()).unwrap();
+        let issue = &issues[1];
+        assert_eq!(issue.number, 42);
+        assert_eq!(issue.state, IssueState::Closed);
+        assert_eq!(issue.title, "Add dark mode");
+    }
+
+    #[test]
+    fn test_parse_gh_response_merged_as_closed() {
+        let issues = parse_gh_response(sample_gh_response_json()).unwrap();
+        // MERGED should map to IssueState::Closed
+        assert_eq!(issues[2].state, IssueState::Closed);
+    }
+
+    #[test]
+    fn test_parse_gh_response_labels_and_assignees() {
+        let issues = parse_gh_response(sample_gh_response_json()).unwrap();
+        // Issue 1: labels = ["bug", "p0"], assignees = ["alice", "bob"]
+        assert_eq!(issues[0].labels, vec!["bug".to_string(), "p0".to_string()]);
+        assert_eq!(issues[0].assignees, vec!["alice".to_string(), "bob".to_string()]);
+        // Issue 42: no assignees
+        assert!(issues[1].assignees.is_empty());
+        // Issue 99: empty labels
+        assert!(issues[2].labels.is_empty());
+    }
+
+    #[test]
+    fn test_parse_gh_response_priority_from_labels() {
+        let issues = parse_gh_response(sample_gh_response_json()).unwrap();
+        assert_eq!(issues[0].priority, Some(Priority::P0));
+        assert_eq!(issues[1].priority, Some(Priority::P2));
+        assert_eq!(issues[2].priority, None);
+    }
+
+    #[test]
+    fn test_parse_gh_response_timestamps() {
+        let issues = parse_gh_response(sample_gh_response_json()).unwrap();
+        assert_eq!(issues[0].created_at, "2026-01-15T10:00:00Z");
+        assert_eq!(issues[0].updated_at, "2026-06-01T12:00:00Z");
+    }
+
+    #[test]
+    fn test_parse_gh_response_invalid_json() {
+        let result = parse_gh_response("not json at all");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("JSON parse error"), "error should mention JSON: {err}");
+    }
+
+    #[test]
+    fn test_parse_gh_response_missing_field() {
+        let result = parse_gh_response(r#"[{"number": 1}]"#);
+        // Missing required fields cause serde errors
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_gh_response_empty_array() {
+        let issues = parse_gh_response("[]").unwrap();
+        assert!(issues.is_empty());
     }
 }
