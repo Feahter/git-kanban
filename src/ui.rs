@@ -1,72 +1,70 @@
-use std::io;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{
-    Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
+    Frame, Terminal,
 };
+use std::io;
 
 use crate::sync;
-use crate::types::{Column, Issue, IssueState, Platform, Priority};
+use crate::types::{Backend, Column, Issue, IssueState, Priority};
 
 pub struct App {
     pub repo: String,
-    pub platform: Platform,
+    pub backend: Backend,
     pub columns: Vec<Column>,
     pub selected_col: usize,
     pub status_msg: String,
     pub loading: bool,
-    pub scroll_offset: u16,
 }
 
 impl App {
-    pub fn new(repo: String, columns: Vec<Column>, platform: Platform) -> Self {
+    pub fn new(repo: String, backend: Backend, columns: Vec<Column>) -> Self {
         App {
             repo,
-            platform,
+            backend,
             columns,
             selected_col: 0,
             status_msg: String::new(),
             loading: true,
-            scroll_offset: 0,
         }
-    }
-
-    pub fn selected_issue(&self) -> Option<&Issue> {
-        let col = self.columns.get(self.selected_col)?;
-        if col.issues.is_empty() {
-            return None;
-        }
-        None
     }
 }
 
 pub fn run(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     repo: String,
-    mut columns: Vec<Column>,
-    platform: Platform,
+    backend: Backend,
+    columns: Vec<Column>,
 ) -> io::Result<()> {
-    let mut app = App::new(repo, columns.clone(), platform);
+    let mut app = App::new(repo, backend, columns.clone());
     let mut col_issues: Vec<Vec<Issue>> = columns.iter().map(|_| vec![]).collect();
     let mut selected_row: usize = 0;
 
-    match sync::fetch_issues(&app.repo, &app.platform) {
+    match sync::fetch_issues(app.backend, &app.repo) {
         Ok(issues) => {
-            crate::config::write_cache(&app.repo, &issues, &crate::now_iso8601());
-            for (i, col) in app.columns.iter_mut().enumerate() {
-                col.issues = issues.iter().filter(|issue| col.matches(issue)).cloned().collect();
+            crate::config::write_cache(&issues, "now");
+            for (_, col) in app.columns.iter_mut().enumerate() {
+                col.issues = issues
+                    .iter()
+                    .filter(|issue| col.matches(issue))
+                    .cloned()
+                    .collect();
             }
             col_issues = app.columns.iter().map(|c| c.issues.clone()).collect();
             app.status_msg = format!("Loaded {} issues", issues.len());
         }
         Err(e) => {
-            if let Some(cached) = crate::config::read_cache(&app.repo) {
-                for (i, col) in app.columns.iter_mut().enumerate() {
-                    col.issues = cached.iter().filter(|issue| col.matches(issue)).cloned().collect();
+            if let Some(cached) = crate::config::read_cache() {
+                for (_, col) in app.columns.iter_mut().enumerate() {
+                    col.issues = cached
+                        .iter()
+                        .filter(|issue| col.matches(issue))
+                        .cloned()
+                        .collect();
                 }
                 app.status_msg = format!("Offline: loaded {} cached issues", cached.len());
             } else {
@@ -92,7 +90,8 @@ pub fn run(
                 KeyCode::Char('j') | KeyCode::Down => {
                     if let Some(col) = app.columns.get(app.selected_col) {
                         if !col.issues.is_empty() {
-                            selected_row = (selected_row + 1).min(col.issues.len().saturating_sub(1));
+                            selected_row =
+                                (selected_row + 1).min(col.issues.len().saturating_sub(1));
                         }
                     }
                 }
@@ -104,11 +103,13 @@ pub fn run(
                     selected_row = 0;
                 }
                 KeyCode::Char('l') | KeyCode::Right => {
-                    app.selected_col = (app.selected_col + 1).min(app.columns.len().saturating_sub(1));
+                    app.selected_col =
+                        (app.selected_col + 1).min(app.columns.len().saturating_sub(1));
                     selected_row = 0;
                 }
                 KeyCode::Tab => {
-                    app.selected_col = (app.selected_col + 1).min(app.columns.len().saturating_sub(1));
+                    app.selected_col =
+                        (app.selected_col + 1).min(app.columns.len().saturating_sub(1));
                     selected_row = 0;
                 }
                 KeyCode::BackTab => {
@@ -120,11 +121,15 @@ pub fn run(
                     app.status_msg = "Refreshing...".into();
                     terminal.draw(|f| draw(f, &mut app, selected_row))?;
 
-                    match sync::fetch_issues(&app.repo, &app.platform) {
+                    match sync::fetch_issues(app.backend, &app.repo) {
                         Ok(issues) => {
-                            crate::config::write_cache(&app.repo, &issues, &crate::now_iso8601());
-                            for (i, col) in app.columns.iter_mut().enumerate() {
-                                col.issues = issues.iter().filter(|issue| col.matches(issue)).cloned().collect();
+                            crate::config::write_cache(&issues, "now");
+                            for (_, col) in app.columns.iter_mut().enumerate() {
+                                col.issues = issues
+                                    .iter()
+                                    .filter(|issue| col.matches(issue))
+                                    .cloned()
+                                    .collect();
                             }
                             col_issues = app.columns.iter().map(|c| c.issues.clone()).collect();
                             app.status_msg = format!("Refreshed: {} issues", issues.len());
@@ -139,20 +144,16 @@ pub fn run(
                     if let Some(col) = app.columns.get(app.selected_col) {
                         if selected_row < col.issues.len() {
                             let issue = &col.issues[selected_row];
-                            sync::open_in_browser(&app.repo, issue.number, &app.platform);
+                            sync::open_in_browser(app.backend, &app.repo, issue.number);
                             app.status_msg = format!("#{} opened in browser", issue.number);
                         }
                     }
                 }
                 KeyCode::Char('n') => {
-                    app.status_msg = "Enter title (type then Enter, or Esc to cancel):".into();
+                    app.status_msg =
+                        "Enter title (type then Enter, or Esc to cancel):".into();
                     terminal.draw(|f| draw(f, &mut app, selected_row))?;
                     if let Some(title) = prompt_input("Title: ")? {
-                        let _target_col = if app.columns.is_empty() {
-                            "todo"
-                        } else {
-                            &app.columns[app.selected_col].id
-                        };
                         let default_labels = if let Some(col) = app.columns.get(app.selected_col) {
                             if col.labels.is_empty() {
                                 vec![]
@@ -163,14 +164,19 @@ pub fn run(
                             vec![]
                         };
 
-                        match sync::create_issue(&app.repo, &title, &default_labels) {
+                        match sync::create_issue(app.backend, &app.repo, &title, None, &default_labels) {
                             Ok(num) => {
                                 app.status_msg = format!("#{} created", num);
-                                if let Ok(issues) = sync::fetch_issues(&app.repo, &app.platform) {
-                                    for (i, col) in app.columns.iter_mut().enumerate() {
-                                        col.issues = issues.iter().filter(|issue| col.matches(issue)).cloned().collect();
+                                if let Ok(issues) = sync::fetch_issues(app.backend, &app.repo) {
+                                    for (_, col) in app.columns.iter_mut().enumerate() {
+                                        col.issues = issues
+                                            .iter()
+                                            .filter(|issue| col.matches(issue))
+                                            .cloned()
+                                            .collect();
                                     }
-                                    col_issues = app.columns.iter().map(|c| c.issues.clone()).collect();
+                                    col_issues =
+                                        app.columns.iter().map(|c| c.issues.clone()).collect();
                                 }
                             }
                             Err(e) => app.status_msg = format!("Create failed: {}", e),
@@ -184,17 +190,50 @@ pub fn run(
                         if selected_row < col.issues.len() {
                             let issue = &col.issues[selected_row];
                             if issue.state == IssueState::Open {
-                                match sync::close_issue(&app.repo, issue.number) {
+                                match sync::close_issue(app.backend, &app.repo, issue.number) {
                                     Ok(()) => {
                                         app.status_msg = format!("#{} closed", issue.number);
-                                        if let Ok(issues) = sync::fetch_issues(&app.repo, &app.platform) {
-                                            for (i, col) in app.columns.iter_mut().enumerate() {
-                                                col.issues = issues.iter().filter(|issue| col.matches(issue)).cloned().collect();
+                                        if let Ok(issues) =
+                                            sync::fetch_issues(app.backend, &app.repo)
+                                        {
+                                            for (_, col) in app.columns.iter_mut().enumerate() {
+                                                col.issues = issues
+                                                    .iter()
+                                                    .filter(|issue| col.matches(issue))
+                                                    .cloned()
+                                                    .collect();
                                             }
-                                            col_issues = app.columns.iter().map(|c| c.issues.clone()).collect();
+                                            col_issues = app
+                                                .columns
+                                                .iter()
+                                                .map(|c| c.issues.clone())
+                                                .collect();
                                         }
                                     }
                                     Err(e) => app.status_msg = format!("Close failed: {}", e),
+                                }
+                            } else {
+                                match sync::reopen_issue(app.backend, &app.repo, issue.number) {
+                                    Ok(()) => {
+                                        app.status_msg = format!("#{} reopened", issue.number);
+                                        if let Ok(issues) =
+                                            sync::fetch_issues(app.backend, &app.repo)
+                                        {
+                                            for (_, col) in app.columns.iter_mut().enumerate() {
+                                                col.issues = issues
+                                                    .iter()
+                                                    .filter(|issue| col.matches(issue))
+                                                    .cloned()
+                                                    .collect();
+                                            }
+                                            col_issues = app
+                                                .columns
+                                                .iter()
+                                                .map(|c| c.issues.clone())
+                                                .collect();
+                                        }
+                                    }
+                                    Err(e) => app.status_msg = format!("Reopen failed: {}", e),
                                 }
                             }
                         }
@@ -204,30 +243,111 @@ pub fn run(
                     if let Some(col) = app.columns.get(app.selected_col) {
                         if selected_row < col.issues.len() {
                             let issue = &col.issues[selected_row].clone();
-                            let next_idx = (app.selected_col + 1).min(app.columns.len().saturating_sub(1));
+                            let next_idx =
+                                (app.selected_col + 1).min(app.columns.len().saturating_sub(1));
                             if next_idx != app.selected_col {
                                 let next_col = &app.columns[next_idx];
-                                let current_labels = &col.labels;
-                                for lbl in current_labels {
-                                    sync::remove_label(&app.repo, issue.number, lbl).ok();
-                                }
-                                for lbl in &next_col.labels {
-                                    sync::add_label(&app.repo, issue.number, lbl).ok();
-                                }
-                                app.status_msg = format!("#{} moved to {}", issue.number, next_col.title);
-                                if let Ok(issues) = sync::fetch_issues(&app.repo, &app.platform) {
-                                    for (i, c) in app.columns.iter_mut().enumerate() {
-                                        c.issues = issues.iter().filter(|issue| c.matches(issue)).cloned().collect();
+                                match sync::move_issue(app.backend, &app.repo, issue.number, &col.labels, &next_col.labels) {
+                                    Ok(()) => {
+                                        app.status_msg =
+                                            format!("#{} moved to {}", issue.number, next_col.title);
+                                        if let Ok(issues) = sync::fetch_issues(app.backend, &app.repo) {
+                                            for (_, c) in app.columns.iter_mut().enumerate() {
+                                                c.issues = issues
+                                                    .iter()
+                                                    .filter(|issue| c.matches(issue))
+                                                    .cloned()
+                                                    .collect();
+                                            }
+                                            col_issues =
+                                                app.columns.iter().map(|c| c.issues.clone()).collect();
+                                        }
                                     }
-                                    col_issues = app.columns.iter().map(|c| c.issues.clone()).collect();
+                                    Err(e) => app.status_msg = format!("Move failed: {}", e),
                                 }
                                 selected_row = 0;
                             }
                         }
                     }
                 }
+                KeyCode::Char('M') => {
+                    if let Some(col) = app.columns.get(app.selected_col) {
+                        if selected_row < col.issues.len() {
+                            let issue = &col.issues[selected_row].clone();
+                            let prev_idx = app.selected_col.saturating_sub(1);
+                            if prev_idx != app.selected_col {
+                                let prev_col = &app.columns[prev_idx];
+                                match sync::move_issue(app.backend, &app.repo, issue.number, &col.labels, &prev_col.labels) {
+                                    Ok(()) => {
+                                        app.status_msg =
+                                            format!("#{} moved to {}", issue.number, prev_col.title);
+                                        if let Ok(issues) = sync::fetch_issues(app.backend, &app.repo) {
+                                            for (_, c) in app.columns.iter_mut().enumerate() {
+                                                c.issues = issues
+                                                    .iter()
+                                                    .filter(|issue| c.matches(issue))
+                                                    .cloned()
+                                                    .collect();
+                                            }
+                                            col_issues =
+                                                app.columns.iter().map(|c| c.issues.clone()).collect();
+                                        }
+                                    }
+                                    Err(e) => app.status_msg = format!("Move failed: {}", e),
+                                }
+                                selected_row = 0;
+                            }
+                        }
+                    }
+                }
+                KeyCode::Char('c') if key.modifiers != KeyModifiers::CONTROL => {
+                    let issue_num = app.columns.get(app.selected_col)
+                        .and_then(|col| col.issues.get(selected_row))
+                        .map(|i| i.number);
+                    if let Some(num) = issue_num {
+                        app.status_msg = "Enter comment (type then Enter, or Esc to cancel):".into();
+                        terminal.draw(|f| draw(f, &mut app, selected_row))?;
+                        if let Some(body) = prompt_input("Comment: ")? {
+                            let b = app.backend;
+                            let r = app.repo.clone();
+                            match sync::add_comment(b, &r, num, &body) {
+                                Ok(()) => app.status_msg = format!("#{} commented", num),
+                                Err(e) => app.status_msg = format!("Comment failed: {}", e),
+                            }
+                        } else {
+                            app.status_msg = "Cancelled".into();
+                        }
+                    }
+                }
+                KeyCode::Char('a') => {
+                    let issue_num = app.columns.get(app.selected_col)
+                        .and_then(|col| col.issues.get(selected_row))
+                        .map(|i| i.number);
+                    if let Some(num) = issue_num {
+                        let b = app.backend;
+                        let r = app.repo.clone();
+                        match sync::assign_self(b, &r, num) {
+                            Ok(()) => {
+                                app.status_msg = format!("#{} assigned to you", num);
+                                if let Ok(issues) = sync::fetch_issues(b, &r) {
+                                    for (_, col) in app.columns.iter_mut().enumerate() {
+                                        col.issues = issues
+                                            .iter()
+                                            .filter(|issue| col.matches(issue))
+                                            .cloned()
+                                            .collect();
+                                    }
+                                    col_issues = app.columns.iter().map(|c| c.issues.clone()).collect();
+                                }
+                            }
+                            Err(e) => app.status_msg = format!("Assign failed: {}", e),
+                        }
+                    }
+                }
                 KeyCode::Char('?') => {
-                    app.status_msg = "h/l:nav  j/k:scroll  Enter:open  n:new  x:close  m:move  r:refresh  ?:help  q:quit".into();
+                    app.status_msg =
+                        "h/l:nav  j/k:scroll  Enter:open  n:new  x:close/reopen  m:move  M:move left  c:comment  a:assign me  r:refresh  ?:help  q:quit"
+                            .into();
                 }
                 _ => {}
             }
@@ -246,9 +366,13 @@ fn draw(f: &mut Frame, app: &mut App, selected_row: usize) {
         .split(area);
 
     let header = format!(
-        " gh-kanban  {}  |  {}",
+        " git-kanban  {}  |  {}",
         app.repo,
-        if app.loading { "Loading..." } else { &app.status_msg }
+        if app.loading {
+            "Loading..."
+        } else {
+            &app.status_msg
+        }
     );
     let header_style = Style::default()
         .fg(Color::Cyan)
@@ -296,7 +420,9 @@ fn draw(f: &mut Frame, app: &mut App, selected_row: usize) {
                     Some(Priority::P0) => Span::styled(" ● ", Style::default().fg(Color::Red)),
                     Some(Priority::P1) => Span::styled(" ● ", Style::default().fg(Color::Yellow)),
                     Some(Priority::P2) => Span::styled(" ● ", Style::default().fg(Color::Green)),
-                    Some(Priority::P3) => Span::styled(" ● ", Style::default().fg(Color::DarkGray)),
+                    Some(Priority::P3) => {
+                        Span::styled(" ● ", Style::default().fg(Color::DarkGray))
+                    }
                     None => Span::raw("   "),
                 };
 
@@ -327,12 +453,36 @@ fn draw(f: &mut Frame, app: &mut App, selected_row: usize) {
                 };
                 let assignee = Span::styled(assignee_str, Style::default().fg(Color::DarkGray));
 
+                // Show first 3 non-column labels as tags [tag] after assignee
+                let col_labels: &[String] = &col.labels;
+                let extra_labels: Vec<&String> = issue
+                    .labels
+                    .iter()
+                    .filter(|l| !col_labels.contains(l))
+                    .take(3)
+                    .collect();
+                let label_tags = if extra_labels.is_empty() {
+                    String::new()
+                } else {
+                    let available = col_area.width.saturating_sub(18) as usize;
+                    let tags: String = extra_labels.iter().map(|l| format!(" [{}]", l)).collect();
+                    if tags.len() > available && available > 8 {
+                        format!(" {}", &tags[..available.saturating_sub(1)])
+                    } else if tags.len() > available {
+                        String::new()
+                    } else {
+                        tags
+                    }
+                };
+                let label_span = Span::styled(label_tags, Style::default().fg(Color::Magenta));
+
                 let line = Line::from(vec![
                     prio_indicator,
                     num,
                     Span::raw(" "),
                     title_span,
                     assignee,
+                    label_span,
                 ]);
 
                 if is_active {
@@ -354,7 +504,7 @@ fn draw(f: &mut Frame, app: &mut App, selected_row: usize) {
                 .title(col_title)
                 .borders(Borders::ALL)
                 .border_style(border_style)
-                .title_alignment(ratatui::layout::Alignment::Center),
+                .title_alignment(Alignment::Center),
         );
 
         f.render_widget(list, col_area);

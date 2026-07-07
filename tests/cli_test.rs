@@ -11,7 +11,7 @@ use std::process::Command;
 fn binary_path() -> String {
     let cargo_manifest = std::env::var("CARGO_MANIFEST_DIR")
         .expect("CARGO_MANIFEST_DIR must be set (run via `cargo test`)");
-    format!("{}/target/debug/gh-kanban", cargo_manifest)
+    format!("{}/target/debug/git-kanban", cargo_manifest)
 }
 
 // ── Synthetic tests (no auth needed) ──
@@ -24,7 +24,7 @@ fn test_help_exits_ok() {
         .expect("failed to execute binary");
     assert!(output.status.success(), "exit code: {}", output.status);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("gh-kanban"), "help should mention gh-kanban");
+    assert!(stdout.contains("git-kanban"), "help should mention git-kanban");
     assert!(stdout.contains("--json"), "help should mention --json");
     assert!(stdout.contains("--repo"), "help should mention --repo");
 }

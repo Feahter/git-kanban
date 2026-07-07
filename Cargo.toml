@@ -1,8 +1,8 @@
 [package]
-name = "gh-kanban"
+name = "git-kanban"
 version = "0.1.0"
 edition = "2021"
-description = "Terminal kanban board for GitHub Issues — ratatui TUI, gh CLI backend, JSON cache"
+description = "Terminal kanban board for Git platforms — ratatui TUI, gh/glab CLI backend, JSON cache"
 
 [dependencies]
 ratatui = "0.30"

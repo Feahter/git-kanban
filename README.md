@@ -1,142 +1,148 @@
-# gh-kanban
+# git-kanban
 
-> **Terminal kanban board for GitHub Issues.**  
-> 874KB single binary. <10ms startup. Zero runtime deps. Agent-friendly JSON mode with column/field filtering.
+> **Terminal kanban board for Git platforms (GitHub/GitLab).**  
+> **终端看板工具，支持 GitHub 和 GitLab Issues。**
+>
+> 858KB single binary. <10ms startup. Zero runtime deps. Agent-friendly JSON mode.
+> 858KB 单文件二进制，毫秒级启动，零运行时依赖，支持 Agent 使用的 JSON 模式。
 
-Turn your GitHub Issues into a TUI kanban board. Move cards between columns with `h`/`j`/`k`/`l`. Create, close, refresh — every operation goes through `gh` CLI, inheriting **your existing auth**. No daemon, no database, no web server, no config hell.
+Turn your Git platform Issues into a TUI kanban board. Move cards with `h`/`j`/`k`/`l`. Create, close, comment, assign — everything goes through `gh` or `glab` CLI, inheriting **your existing auth**.
 
-```
-cargo install --git https://github.com/Feahter/gh-kanban
-gh-kanban --repo owner/name
+把你的 GitHub/GitLab Issues 变成终端看板，所有操作通过现有 CLI 认证，无需额外配置。
+
+```bash
+git-kanban --repo owner/name   # TUI 模式
+git-kanban --json --repo R     # Agent JSON 模式
+git-kanban create "bug: ..." --body "..." --label bug  # 创建 Issue
 ```
 
 ---
 
-## Why
-
-GitHub Issues is where your work lives, but its web UI is slow and modal-ridden.  
-You don't need Jira. You need `gh issue list --json` rendered into columns you can move cards across with keystrokes.
-
-**gh-kanban is that.** The laziest, fastest wrapper around `gh` that gives you a visual kanban without leaving your terminal.
-
----
-
-## Features
-
-### 🏠 Fully Local
-
-- Every keystroke hits **your JSON cache**, not GitHub's servers
-- Network only touches `gh` CLI — **your auth, your rate limit, your proxy config**
-- Offline? Reads last cached state instantly
-- No daemon, no web server, no Electron, no "sign in with GitHub" popup
-
-### ⚡ Ridiculously Fast
-
-| Metric | Value |
-|--------|-------|
-| Binary size | **874 KB** (single file, `strip`+`LTO`) |
-| Cold start | **<10ms** from JSON cache |
-| Dependencies | **4 crates** — ratatui, crossterm, serde_json, clap |
-| No async runtime | ❌ tokio |
-| No embedded DB | ❌ SQLite |
-| No HTTP client | ❌ octocrab/reqwest |
-| No system deps | ❌ ncurses, libsqlite3, libssl |
-
-### 🤖 Agent-Friendly
-
-Built for Hermes / Claude Code / Codex agents:
+## Quick Start / 快速开始
 
 ```bash
-# All issues as JSON
-gh-kanban --json --repo owner/name
+# Prerequisites - 安装 CLI 工具
+gh auth login     # GitHub
+glab auth login   # GitLab
 
-# Filter by column
-gh-kanban --json --repo owner/name --column todo
+# Install - 安装
+cargo install --git https://github.com/Feahter/git-kanban
 
-# Select specific fields (reduces token waste)
-gh-kanban --json --repo owner/name --fields number,title,state,priority
-
-# Per-column count summary
-gh-kanban --summary --repo owner/name
-
-# Refresh cache silently (for cron/agent workflows)
-gh-kanban --refresh --repo owner/name
-```
-
-Every TUI action has a corresponding `gh` CLI call, so agents can script the same operations.
-
----
-
-## Quick Start
-
-### Prerequisites
-
-```bash
-# GitHub CLI installed and authenticated
-gh auth login
-```
-
-### Install
-
-```bash
-cargo install --git https://github.com/Feahter/gh-kanban
-```
-
-Or download the binary from [Releases](https://github.com/Feahter/gh-kanban/releases).
-
-### Run
-
-```bash
-# First run — point at your repo
-gh-kanban --repo Feahter/gh-kanban
-
-# Config saved to ~/.config/gh-kanban/config.json — subsequent runs remember it
-gh-kanban
+# Run - 运行
+git-kanban --repo owner/name
 ```
 
 ---
 
-## Usage
+## Keybindings / 按键
 
-### Keybindings
+| Key 按键 | Action 动作 |
+|----------|-------------|
+| `h`/`l` or ←/→ | Navigate columns / 左右切换列 |
+| `Tab`/`BackTab` | Navigate columns / 切换列 |
+| `j`/`k` or ↑/↓ | Scroll cards / 上下滚动卡片 |
+| `Enter` | Open issue in browser / 浏览器打开 |
+| `n` | New issue / 新建 Issue |
+| `x` | Close / reopen / 关闭或重开 |
+| `m` / `M` | Move right / left / 右移或左移 |
+| `c` | Add comment / 添加评论 |
+| `a` | Assign yourself / 指派给自己 |
+| `r` | Refresh / 刷新 |
+| `?` | Help / 帮助 |
+| `q` or Ctrl+C | Quit / 退出 |
 
-| Key | Action |
-|-----|--------|
-| `h`/`l` or ←/→ | Navigate columns |
-| `Tab`/`BackTab` | Navigate columns |
-| `j`/`k` or ↑/↓ | Scroll cards |
-| `Enter` | Open issue in browser |
-| `n` | New issue (prompts for title) |
-| `x` | Close issue |
-| `m` | Move to next column |
-| `r` | Refresh from GitHub |
-| `?` | Show help |
-| `q` or Ctrl+C | Quit |
+---
 
-### Labels = Columns
+## Agent Usage / Agent 接口
 
-Issues organize into columns by their **labels**. Default mapping:
+git-kanban is designed for AI agents (Claude Code, Codex, Hermes). Every TUI operation also has a CLI subcommand.
 
-| Column | Matches labels |
-|--------|---------------|
-| 📋 Todo | `todo`, `status:todo` |
-| 🔧 Doing | `doing`, `status:doing`, `in-progress` |
-| 👀 Review | `review`, `status:review` |
-| ✅ Done | `done`, `status:done` |
-| ❌ Closed | state=closed (any label) |
+专为 AI Agent 设计，TUI 所有操作都有对应的 CLI 子命令。
 
-Priority detected from labels: `P0`, `P1`, `P2`, `P3` or `priority:0`–`priority:3`.
+```bash
+# Read — 读取
+git-kanban --json --repo R              # List all issues (含 body 描述)
+git-kanban --refresh --repo R           # Refresh cache / 刷新缓存
 
-### Customize Columns
+# Write — 写入
+git-kanban create "title" --body "desc" --label bug     # Create / 创建
+git-kanban close <num>                                   # Close / 关闭
+git-kanban reopen <num>                                   # Reopen / 重开
+git-kanban comment <num> --body "msg"                     # Comment / 评论
+git-kanban assign <num>                                   # Assign self / 指派自己
+git-kanban assign <num> --user someone                    # Assign to user / 指派他人
+git-kanban move <num> --add-label doing --remove-label todo   # Move / 移动列
 
-Edit `~/.config/gh-kanban/config.json` to override column label mappings:
+# Example agent workflow — Agent 工作流示例：
+# 1. List open issues
+# 2. Assign the most urgent one to yourself
+# 3. Move it to "doing" column
+# 4. Add a comment
+issues=$(git-kanban --json --repo R)
+git-kanban assign 42 \
+  && git-kanban move 42 --add-label doing --remove-label todo \
+  && git-kanban comment 42 --body "Taking a look"
+```
+
+### JSON Output / JSON 输出格式
 
 ```json
 {
   "repo": "owner/name",
+  "backend": "github",
+  "count": 5,
+  "issues": [
+    {
+      "number": 42,
+      "title": "Fix login bug",
+      "body": "Users cannot login with SSO...",
+      "state": "Open",
+      "labels": ["bug", "auth"],
+      "assignees": ["fez"],
+      "priority": "P0",
+      "created_at": "2026-07-01T10:00:00Z",
+      "updated_at": "2026-07-07T12:00:00Z"
+    }
+  ]
+}
+```
+
+### Move Semantics / `move` 语义说明
+
+`move` adds and/or removes labels — it doesn't physically drag across columns.  
+Agent 调用 `move` 时需同时指定 **remove 源列标签** 和 **add 目标列标签**，这是标签增删操作而非物理拖动。
+
+```bash
+# ✅ Correct — 正确用法
+git-kanban move 42 --remove-label todo --add-label doing
+
+# ❌ Wrong (issue stays in both columns) — 错误（issue 会同时存在两列）
+git-kanban move 42 --add-label doing
+```
+
+---
+
+## GitLab
+
+```bash
+git-kanban --gitlab --repo owner/name
+```
+
+Or set `"backend": "gitlab"` in `~/.config/git-kanban/config.json`.
+
+---
+
+## Config / 配置
+
+`~/.config/git-kanban/config.json`:
+
+```json
+{
+  "repo": "owner/name",
+  "backend": "github",
   "columns": {
     "todo": ["backlog", "triage"],
-    "doing": ["wip", "in-progress"],
+    "doing": ["wip"],
     "review": ["needs-review"]
   }
 }
@@ -144,42 +150,35 @@ Edit `~/.config/gh-kanban/config.json` to override column label mappings:
 
 ---
 
-## Design
+## Design / 架构
 
 ```
                 ┌──────────────────────┐
-                │   gh-kanban TUI      │
+                │   git-kanban TUI     │
                 │  (ratatui + serde)   │
                 ├──────────┬───────────┤
-                │ JSON     │ gh CLI    │
+                │ JSON     │ CLI       │
                 │ cache    │ wrapper   │
                 │(read)    │(write)    │
                 └────┬─────┴─────┬─────┘
                      │           │
-              ~/.cache/    gh issue list
-           gh-kanban/    gh issue create
-           issues.json   gh issue close
-                         gh issue edit
+              ~/.cache/    gh/glab issue
+           git-kanban/    list/create/
+           issues.json    close/edit/comment
 ```
 
-- **Read path:** JSON cache → render instantly → background sync refreshes cache
-- **Write path:** `gh issue create/edit/close` → refresh cache on completion
-- **Auth:** Zero config — inherits your existing `~/.config/gh/` OAuth token
+- **Read path:** JSON cache → render → background sync
+- **Write path:** CLI command → refresh cache
+- **Auth:** Zero config — inherits `~/.config/gh/` or `~/.config/glab/` tokens
 
----
-
-## Roadmap
-
-- [x] Kanban columns with label mapping
-- [x] Priority coloring (P0–P3)
-- [x] New / close / move issues
-- [x] Agent JSON mode (column filter, field select, summary)
-- [x] AGENTS.md for agent tooling
-- [x] Offline cache
-- [ ] Search / filter (`/` key)
-- [ ] Issue detail view (body, comments)
-- [ ] Mouse drag-and-drop
-- [ ] Multi-repo support
+| Metric 指标 | Value 值 |
+|-------------|----------|
+| Binary size 体积 | 858 KB (single file) |
+| Cold start 冷启动 | <10ms |
+| Dependencies 依赖 | 4 crates |
+| Async runtime | ❌ tokio |
+| Embedded DB | ❌ SQLite |
+| HTTP client | ❌ octocrab/reqwest |
 
 ---
 

@@ -552,7 +552,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gh-kanban"
+name = "git-kanban"
 version = "0.1.0"
 dependencies = [
  "clap",
