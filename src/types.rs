@@ -72,7 +72,9 @@ pub struct GhIssue {
     pub state: String,
     pub labels: Vec<GhLabel>,
     pub assignees: Vec<GhAssignee>,
+    #[serde(rename = "createdAt")]
     pub created_at: String,
+    #[serde(rename = "updatedAt")]
     pub updated_at: String,
 }
 
