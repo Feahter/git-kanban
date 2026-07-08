@@ -90,7 +90,7 @@ fn test_binary_name_in_help() {
         .output()
         .expect("failed to execute binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("gh-kanban"));
+    assert!(stdout.contains("git-kanban"));
     assert!(stdout.contains("kanban"));
     assert!(stdout.contains("GitHub"));
 }

@@ -51,6 +51,14 @@ struct Cli {
     #[arg(long)]
     refresh: bool,
 
+    /// Suppress informational output (agent/cron mode)
+    #[arg(long)]
+    quiet: bool,
+
+    /// Show what would happen without executing (agent mode)
+    #[arg(long)]
+    dry_run: bool,
+
     /// Action to perform (agent mode — exits after completion)
     #[command(subcommand)]
     action: Option<Action>,
@@ -139,6 +147,36 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
+    // Dry-run mode: print what would happen and exit (agent mode)
+    if cli.dry_run {
+        if let Some(ref action) = cli.action {
+            match action {
+                Action::Create { title, label, .. } => {
+                    println!("[dry-run] create \"{}\" with labels {:?}", title, label);
+                }
+                Action::Close { number } => {
+                    println!("[dry-run] close #{}", number);
+                }
+                Action::Reopen { number } => {
+                    println!("[dry-run] reopen #{}", number);
+                }
+                Action::Comment { number, body } => {
+                    println!("[dry-run] comment on #{}: \"{}\"", number, body);
+                }
+                Action::Assign { number, user } => {
+                    match user {
+                        Some(u) => println!("[dry-run] assign #{} to {}", number, u),
+                        None => println!("[dry-run] assign #{} to self", number),
+                    }
+                }
+                Action::Move { number, add_label, remove_label } => {
+                    println!("[dry-run] move #{}: add={:?} remove={:?}", number, add_label, remove_label);
+                }
+            }
+            return Ok(());
+        }
+    }
+
     // Execute action (agent mode) — runs first so it's explicit
     if let Some(action) = cli.action {
         match action {
@@ -207,14 +245,22 @@ fn main() -> io::Result<()> {
 
     // Refresh mode: cache was already updated above, just confirm
     if cli.refresh {
-        let count = issues.len();
-        println!("Cached {} issues from {}", count, cfg.repo);
+        if !cli.quiet {
+            let count = issues.len();
+            println!("Cached {} issues from {}", count, cfg.repo);
+        }
         return Ok(());
     }
 
     // Summary mode: per-column counts
     if cli.summary {
-        let counts: Vec<serde_json::Value> = cfg.columns.iter()
+        let counts: Vec<serde_json::Value> = cfg
+            .columns
+            .iter()
+            .filter(|col| {
+                // If --column is set, only show that column
+                cli.column.as_ref().map_or(true, |name| col.id == *name)
+            })
             .map(|col| serde_json::json!({
                 "id": col.id,
                 "title": col.title,
@@ -258,10 +304,14 @@ fn main() -> io::Result<()> {
             "issues": filtered,
         });
 
-        // Apply field selection filter
+        // Apply field selection filter to each issue item only
         if let Some(fields_str) = &cli.fields {
             let field_list: Vec<String> = fields_str.split(',').map(|s| s.trim().to_string()).collect();
-            v = select_fields(&v, &field_list);
+            let filtered_issues: Vec<serde_json::Value> = v["issues"]
+                .as_array()
+                .map(|arr| arr.iter().map(|issue| select_fields(issue, &field_list)).collect())
+                .unwrap_or_default();
+            v["issues"] = serde_json::Value::Array(filtered_issues);
         }
 
         let json = serde_json::to_string_pretty(&v).unwrap_or_default();

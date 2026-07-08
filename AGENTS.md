@@ -1,12 +1,12 @@
-# gh-kanban — Agent Instructions
+# git-kanban — Agent Instructions
 
-Terminal kanban board for GitHub Issues. All operations go through `gh` CLI.
+Terminal kanban board for GitHub/GitLab Issues. All operations go through `gh` or `glab` CLI.
 
 ## Build & Install
 
 ```bash
 cargo build --release
-# Binary at target/release/gh-kanban
+# Binary at target/release/git-kanban
 ```
 
 ## Common Agent Workflows
@@ -14,53 +14,73 @@ cargo build --release
 ### Read Issues (JSON)
 ```bash
 # All issues (live — calls gh/glab)
-gh-kanban --json --repo owner/name
+git-kanban --json --repo owner/name
 
 # From local cache (instant, <10ms, may be stale)
-gh-kanban --json --repo owner/name --cached
+git-kanban --json --repo owner/name --cached
 
 # All issues (GitLab)
-gh-kanban --json --repo namespace/project --platform gitlab
+git-kanban --json --repo namespace/project --platform gitlab
 
 # Filter by column
-gh-kanban --json --repo owner/name --column todo
+git-kanban --json --repo owner/name --column todo
 
 # Select fields
-gh-kanban --json --repo owner/name --fields number,title,state,priority
+git-kanban --json --repo owner/name --fields number,title,state,priority
 
 # Per-column summary
-gh-kanban --summary --repo owner/name
+git-kanban --summary --repo owner/name
+
+# Filter summary by column
+git-kanban --summary --repo owner/name --column doing
+```
+
+### Write Operations (built-in subcommands)
+```bash
+# Create issue
+git-kanban create "Title" --repo owner/name --label todo --body "Description"
+
+# Close issue
+git-kanban close <number> --repo owner/name
+
+# Reopen issue
+git-kanban reopen <number> --repo owner/name
+
+# Add comment
+git-kanban comment <number> --repo owner/name --body "Comment text"
+
+# Assign self
+git-kanban assign <number> --repo owner/name
+
+# Assign someone else
+git-kanban assign <number> --repo owner/name --user someone
+
+# Move issue (change labels)
+git-kanban move <number> --repo owner/name --add-label doing --remove-label todo
 ```
 
 ### Cache Management
 ```bash
 # Refresh cache without TUI
-gh-kanban --refresh --repo owner/name
+git-kanban --refresh --repo owner/name
 
 # Cache location
-# ~/.cache/gh-kanban/issues.json
+# ~/.cache/git-kanban/issues.json
 ```
 
-### Write Operations (via gh CLI directly)
+### TUI Mode (default)
 ```bash
-# Create issue
-gh issue create --repo owner/name --title "Title" --label "todo"
-
-# Close issue
-gh issue close <number> --repo owner/name
-
-# Move issue (change label)
-gh issue edit <number> --repo owner/name --add-label doing --remove-label todo
+git-kanban --repo owner/name
 ```
 
 ## Architecture
 
 ```
 src/
-├── main.rs     — CLI entry, flag parsing, JSON/summary/refresh modes
+├── main.rs     — CLI entry, flag parsing, JSON/summary/refresh modes, write commands
 ├── types.rs    — Data types: Issue, Column, Priority, Config
 ├── config.rs   — Config loading, JSON cache read/write
-├── sync.rs     — gh CLI wrapper (issue CRUD, label mgmt)
+├── sync.rs     — gh/glab CLI wrapper (issue CRUD, label mgmt)
 └── ui.rs       — ratatui TUI rendering and event handling
 ```
 
@@ -68,8 +88,8 @@ src/
 
 - No async runtime (tokio). No HTTP client (reqwest/octocrab). No database (SQLite).
 - Errors → stderr. Data → stdout.
-- All write operations delegate to `gh` CLI via `std::process::Command`.
-- Config → `~/.config/gh-kanban/config.json`. Cache → `~/.cache/gh-kanban/issues.json`.
+- All external operations delegate to `gh` or `glab` CLI via `std::process::Command`.
+- Config → `~/.config/git-kanban/config.json`. Cache → `~/.cache/git-kanban/issues.json`.
 
 ## Boundaries
 
