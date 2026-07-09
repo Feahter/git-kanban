@@ -203,7 +203,7 @@ fn create_gh_issue(repo: &str, title: &str, body: Option<&str>, labels: &[String
 fn fetch_glab_issues(repo: &str) -> Result<Vec<Issue>, String> {
     let per_page = 100;
     let max_issues = 1000;
-    let mut all_gh_issues: Vec<GlabIssue> = Vec::new();
+    let mut all_glab_issues: Vec<GlabIssue> = Vec::new();
 
     for page in 1.. {
         let output = Command::new("glab")
@@ -226,15 +226,15 @@ fn fetch_glab_issues(repo: &str) -> Result<Vec<Issue>, String> {
             .map_err(|e| format!("JSON parse error: {}", e))?;
 
         let count = page_issues.len();
-        all_gh_issues.extend(page_issues);
+        all_glab_issues.extend(page_issues);
 
         // Stop if fewer than per_page — last page
-        if count < per_page || all_gh_issues.len() >= max_issues {
+        if count < per_page || all_glab_issues.len() >= max_issues {
             break;
         }
     }
 
-    let issues: Vec<Issue> = all_gh_issues
+    let issues: Vec<Issue> = all_glab_issues
         .into_iter()
         .map(|gi| {
             let assignees: Vec<String> = gi.assignees.iter().map(|a| a.username.clone()).collect();

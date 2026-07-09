@@ -46,7 +46,9 @@ pub fn run(
 
     match sync::fetch_issues(app.backend, &app.repo) {
         Ok(issues) => {
-            crate::config::write_cache(&issues, &crate::chrono_now(), &app.repo);
+            if !crate::config::write_cache(&issues, &crate::chrono_now(), &app.repo) {
+                app.status_msg = format!("Warning: failed to write cache");
+            }
             for (_, col) in app.columns.iter_mut().enumerate() {
                 col.issues = issues
                     .iter()
@@ -123,7 +125,9 @@ pub fn run(
 
                     match sync::fetch_issues(app.backend, &app.repo) {
                         Ok(issues) => {
-                            crate::config::write_cache(&issues, &crate::chrono_now(), &app.repo);
+                            if !crate::config::write_cache(&issues, &crate::chrono_now(), &app.repo) {
+                                app.status_msg = format!("Warning: failed to write cache");
+                            }
                             for (_, col) in app.columns.iter_mut().enumerate() {
                                 col.issues = issues
                                     .iter()

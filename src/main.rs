@@ -153,7 +153,9 @@ fn main() -> io::Result<()> {
                         println!("{}", num);
                         // Refresh cache after write
                         if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
-                            config::write_cache(&issues, &chrono_now(), &cfg.repo);
+                            if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
+                                eprintln!("Warning: failed to write cache");
+                            }
                         }
                     }
                     Err(e) => { eprintln!("{}", e); std::process::exit(1); }
@@ -165,7 +167,9 @@ fn main() -> io::Result<()> {
                 }
                 // Refresh cache after write
                 if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
-                    config::write_cache(&issues, &chrono_now(), &cfg.repo);
+                    if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
+                        eprintln!("Warning: failed to write cache");
+                    }
                 }
             }
             Action::Reopen { number } => {
@@ -174,7 +178,9 @@ fn main() -> io::Result<()> {
                 }
                 // Refresh cache after write
                 if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
-                    config::write_cache(&issues, &chrono_now(), &cfg.repo);
+                    if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
+                        eprintln!("Warning: failed to write cache");
+                    }
                 }
             }
             Action::Comment { number, body } => {
@@ -194,7 +200,9 @@ fn main() -> io::Result<()> {
                 if let Err(e) = result { eprintln!("{}", e); std::process::exit(1); }
                 // Refresh cache after write
                 if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
-                    config::write_cache(&issues, &chrono_now(), &cfg.repo);
+                    if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
+                        eprintln!("Warning: failed to write cache");
+                    }
                 }
             }
             Action::Move { number, add_label, remove_label } => {
@@ -203,7 +211,9 @@ fn main() -> io::Result<()> {
                 }
                 // Refresh cache after write
                 if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
-                    config::write_cache(&issues, &chrono_now(), &cfg.repo);
+                    if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
+                        eprintln!("Warning: failed to write cache");
+                    }
                 }
             }
             Action::Open { number } => {
