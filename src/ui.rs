@@ -46,7 +46,7 @@ pub fn run(
 
     match sync::fetch_issues(app.backend, &app.repo) {
         Ok(issues) => {
-            crate::config::write_cache(&issues, "now");
+            crate::config::write_cache(&issues, &crate::chrono_now(), &app.repo);
             for (_, col) in app.columns.iter_mut().enumerate() {
                 col.issues = issues
                     .iter()
@@ -58,7 +58,7 @@ pub fn run(
             app.status_msg = format!("Loaded {} issues", issues.len());
         }
         Err(e) => {
-            if let Some(cached) = crate::config::read_cache() {
+            if let Some(cached) = crate::config::read_cache(&app.repo) {
                 for (_, col) in app.columns.iter_mut().enumerate() {
                     col.issues = cached
                         .iter()
@@ -123,7 +123,7 @@ pub fn run(
 
                     match sync::fetch_issues(app.backend, &app.repo) {
                         Ok(issues) => {
-                            crate::config::write_cache(&issues, &crate::chrono_now());
+                            crate::config::write_cache(&issues, &crate::chrono_now(), &app.repo);
                             for (_, col) in app.columns.iter_mut().enumerate() {
                                 col.issues = issues
                                     .iter()

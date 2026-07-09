@@ -201,21 +201,40 @@ fn create_gh_issue(repo: &str, title: &str, body: Option<&str>, labels: &[String
 // ── GitLab implementations ──────────────────────────────────
 
 fn fetch_glab_issues(repo: &str) -> Result<Vec<Issue>, String> {
-    let output = Command::new("glab")
-        .args(["issue", "list", "--repo", repo, "--all", "--output", "json"])
-        .output()
-        .map_err(|e| format!("Failed to run glab: {}", e))?;
+    let per_page = 100;
+    let max_issues = 1000;
+    let mut all_gh_issues: Vec<GlabIssue> = Vec::new();
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("glab error: {}", stderr.trim()));
+    for page in 1.. {
+        let output = Command::new("glab")
+            .args([
+                "issue", "list", "--repo", repo, "--all",
+                "--output", "json",
+                "--per-page", &per_page.to_string(),
+                "--page", &page.to_string(),
+            ])
+            .output()
+            .map_err(|e| format!("Failed to run glab: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("glab error: {}", stderr.trim()));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let page_issues: Vec<GlabIssue> = serde_json::from_str(&stdout)
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+
+        let count = page_issues.len();
+        all_gh_issues.extend(page_issues);
+
+        // Stop if fewer than per_page — last page
+        if count < per_page || all_gh_issues.len() >= max_issues {
+            break;
+        }
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let glab_issues: Vec<GlabIssue> = serde_json::from_str(&stdout)
-        .map_err(|e| format!("JSON parse error: {}", e))?;
-
-    let issues: Vec<Issue> = glab_issues
+    let issues: Vec<Issue> = all_gh_issues
         .into_iter()
         .map(|gi| {
             let assignees: Vec<String> = gi.assignees.iter().map(|a| a.username.clone()).collect();

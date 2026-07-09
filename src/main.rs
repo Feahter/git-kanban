@@ -149,7 +149,13 @@ fn main() -> io::Result<()> {
         match action {
             Action::Create { title, body, label } => {
                 match sync::create_issue(cfg.backend, &cfg.repo, &title, body.as_deref(), &label) {
-                    Ok(num) => println!("{}", num),
+                    Ok(num) => {
+                        println!("{}", num);
+                        // Refresh cache after write
+                        if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
+                            config::write_cache(&issues, &chrono_now(), &cfg.repo);
+                        }
+                    }
                     Err(e) => { eprintln!("{}", e); std::process::exit(1); }
                 }
             }
@@ -157,15 +163,27 @@ fn main() -> io::Result<()> {
                 if let Err(e) = sync::close_issue(cfg.backend, &cfg.repo, number) {
                     eprintln!("{}", e); std::process::exit(1);
                 }
+                // Refresh cache after write
+                if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
+                    config::write_cache(&issues, &chrono_now(), &cfg.repo);
+                }
             }
             Action::Reopen { number } => {
                 if let Err(e) = sync::reopen_issue(cfg.backend, &cfg.repo, number) {
                     eprintln!("{}", e); std::process::exit(1);
                 }
+                // Refresh cache after write
+                if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
+                    config::write_cache(&issues, &chrono_now(), &cfg.repo);
+                }
             }
             Action::Comment { number, body } => {
                 if let Err(e) = sync::add_comment(cfg.backend, &cfg.repo, number, &body) {
                     eprintln!("{}", e); std::process::exit(1);
+                }
+                // Refresh cache after write
+                if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
+                    config::write_cache(&issues, &chrono_now(), &cfg.repo);
                 }
             }
             Action::Assign { number, user } => {
@@ -174,10 +192,18 @@ fn main() -> io::Result<()> {
                     None => sync::assign_self(cfg.backend, &cfg.repo, number),
                 };
                 if let Err(e) = result { eprintln!("{}", e); std::process::exit(1); }
+                // Refresh cache after write
+                if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
+                    config::write_cache(&issues, &chrono_now(), &cfg.repo);
+                }
             }
             Action::Move { number, add_label, remove_label } => {
                 if let Err(e) = sync::move_issue(cfg.backend, &cfg.repo, number, &remove_label, &add_label) {
                     eprintln!("{}", e); std::process::exit(1);
+                }
+                // Refresh cache after write
+                if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
+                    config::write_cache(&issues, &chrono_now(), &cfg.repo);
                 }
             }
             Action::Open { number } => {
@@ -190,7 +216,7 @@ fn main() -> io::Result<()> {
 
     // Resolve issues source: cached or live fetch
     let issues = if cli.cached {
-        config::read_cache()
+        config::read_cache(&cfg.repo)
             .ok_or_else(|| {
                 eprintln!("No cache found. Run without --cached first, or use --refresh.");
                 std::process::exit(1);
@@ -199,11 +225,13 @@ fn main() -> io::Result<()> {
     } else {
         match sync::fetch_issues(cfg.backend, &cfg.repo) {
             Ok(issues) => {
-                config::write_cache(&issues, &chrono_now());
+                if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
+                    eprintln!("Warning: failed to write cache");
+                }
                 issues
             }
             Err(e) => {
-                if let Some(cached) = config::read_cache() {
+                if let Some(cached) = config::read_cache(&cfg.repo) {
                     eprintln!("Warning: live fetch failed ({}), using cached data", e);
                     cached
                 } else {

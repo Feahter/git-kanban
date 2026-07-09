@@ -28,8 +28,9 @@ fn cache_dir() -> PathBuf {
     base.join(CONFIG_DIR)
 }
 
-pub fn cache_file_path() -> PathBuf {
-    cache_dir().join("issues.json")
+pub fn cache_file_path(repo: &str) -> PathBuf {
+    let safe_name = repo.replace('/', "-");
+    cache_dir().join(format!("issues-{}.json", safe_name))
 }
 
 pub fn load() -> Config {
@@ -102,23 +103,36 @@ pub fn load() -> Config {
     cfg
 }
 
-pub fn write_cache(issues: &[crate::types::Issue], last_sync: &str) {
+/// Write cache with atomic rename to prevent partial writes.
+/// Returns `true` on success, `false` on failure (caller should log).
+pub fn write_cache(issues: &[crate::types::Issue], last_sync: &str, repo: &str) -> bool {
     let dir = cache_dir();
-    std::fs::create_dir_all(&dir).ok();
-    let path = dir.join("issues.json");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let safe_name = repo.replace('/', "-");
+    let path = dir.join(format!("issues-{}.json", safe_name));
+    let tmp_path = dir.join(format!("issues-{}.tmp", safe_name));
 
     let data = serde_json::json!({
         "last_sync": last_sync,
+        "repo": repo,
         "issues": issues,
     });
 
-    if let Ok(json) = serde_json::to_string_pretty(&data) {
-        std::fs::write(&path, &json).ok();
+    let json = match serde_json::to_string_pretty(&data) {
+        Ok(j) => j,
+        Err(_) => return false,
+    };
+
+    if std::fs::write(&tmp_path, &json).is_err() {
+        return false;
     }
+    std::fs::rename(&tmp_path, &path).is_ok()
 }
 
-pub fn read_cache() -> Option<Vec<crate::types::Issue>> {
-    let path = cache_file_path();
+pub fn read_cache(repo: &str) -> Option<Vec<crate::types::Issue>> {
+    let path = cache_file_path(repo);
     if !path.exists() {
         return None;
     }
@@ -177,12 +191,12 @@ mod tests {
         std::env::set_var("XDG_CACHE_HOME", &tmp);
 
         let issues = make_test_issues();
-        write_cache(&issues, "2024-01-01T12:00:00Z");
+        write_cache(&issues, "2024-01-01T12:00:00Z", "test/repo");
 
-        let path = cache_file_path();
+        let path = cache_file_path("test/repo");
         assert!(path.exists(), "cache file should exist");
 
-        let loaded = read_cache();
+        let loaded = read_cache("test/repo");
         assert!(loaded.is_some(), "read_cache should return Some");
         let loaded = loaded.unwrap();
         assert_eq!(loaded.len(), 2);
@@ -209,7 +223,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::env::set_var("XDG_CACHE_HOME", &tmp);
 
-        assert!(read_cache().is_none(), "should return None when no cache file");
+        assert!(read_cache("test/repo").is_none(), "should return None when no cache file");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -223,10 +237,10 @@ mod tests {
         std::fs::create_dir_all(&tmp.join("git-kanban")).unwrap();
         std::env::set_var("XDG_CACHE_HOME", &tmp);
 
-        let path = cache_file_path();
+        let path = cache_file_path("test/repo");
         std::fs::write(&path, "not valid json").unwrap();
 
-        assert!(read_cache().is_none(), "should return None for corrupt cache");
+        assert!(read_cache("test/repo").is_none(), "should return None for corrupt cache");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -348,10 +362,10 @@ mod tests {
         std::fs::create_dir_all(&tmp.join("git-kanban")).unwrap();
         std::env::set_var("XDG_CACHE_HOME", &tmp);
 
-        let path = cache_file_path();
+        let path = cache_file_path("test/repo");
         std::fs::write(&path, r#"{"last_sync": "2024-01-01"}"#).unwrap();
 
-        assert!(read_cache().is_none(), "should return None when issues key missing");
+        assert!(read_cache("test/repo").is_none(), "should return None when issues key missing");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
