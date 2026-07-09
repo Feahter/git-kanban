@@ -181,3 +181,416 @@ impl Default for Config {
         }
     }
 }
+
+// ── Unit tests ──
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Priority tests ──
+
+    #[test]
+    fn test_priority_from_labels_p0() {
+        let labels = vec!["p0".to_string()];
+        assert_eq!(Priority::from_labels(&labels), Some(Priority::P0));
+    }
+
+    #[test]
+    fn test_priority_from_labels_p1() {
+        let labels = vec!["p1".to_string()];
+        assert_eq!(Priority::from_labels(&labels), Some(Priority::P1));
+    }
+
+    #[test]
+    fn test_priority_from_labels_p2() {
+        let labels = vec!["p2".to_string()];
+        assert_eq!(Priority::from_labels(&labels), Some(Priority::P2));
+    }
+
+    #[test]
+    fn test_priority_from_labels_p3() {
+        let labels = vec!["p3".to_string()];
+        assert_eq!(Priority::from_labels(&labels), Some(Priority::P3));
+    }
+
+    #[test]
+    fn test_priority_from_labels_priority_colon() {
+        let labels = vec!["priority:1".to_string()];
+        assert_eq!(Priority::from_labels(&labels), Some(Priority::P1));
+    }
+
+    #[test]
+    fn test_priority_from_labels_priority_dash() {
+        let labels = vec!["priority-p2".to_string()];
+        assert_eq!(Priority::from_labels(&labels), Some(Priority::P2));
+    }
+
+    #[test]
+    fn test_priority_from_labels_case_insensitive() {
+        let labels = vec!["P0".to_string(), "PRIORITY:3".to_string()];
+        assert_eq!(Priority::from_labels(&labels), Some(Priority::P0));
+    }
+
+    #[test]
+    fn test_priority_from_labels_none() {
+        let labels = vec!["bug".to_string(), "feature".to_string()];
+        assert_eq!(Priority::from_labels(&labels), None);
+    }
+
+    #[test]
+    fn test_priority_from_labels_empty() {
+        let labels: Vec<String> = vec![];
+        assert_eq!(Priority::from_labels(&labels), None);
+    }
+
+    #[test]
+    fn test_priority_from_labels_first_match_wins() {
+        let labels = vec!["p2".to_string(), "p0".to_string()];
+        assert_eq!(Priority::from_labels(&labels), Some(Priority::P2));
+    }
+
+    #[test]
+    fn test_priority_display() {
+        assert_eq!(format!("{}", Priority::P0), "P0");
+        assert_eq!(format!("{}", Priority::P1), "P1");
+        assert_eq!(format!("{}", Priority::P2), "P2");
+        assert_eq!(format!("{}", Priority::P3), "P3");
+    }
+
+    #[test]
+    fn test_priority_serde_roundtrip() {
+        for p in &[Priority::P0, Priority::P1, Priority::P2, Priority::P3] {
+            let json = serde_json::to_string(p).unwrap();
+            let deserialized: Priority = serde_json::from_str(&json).unwrap();
+            assert_eq!(*p, deserialized);
+        }
+    }
+
+    // ── IssueState serde ──
+
+    #[test]
+    fn test_issue_state_serde_roundtrip() {
+        for state in &[IssueState::Open, IssueState::Closed] {
+            let json = serde_json::to_string(state).unwrap();
+            let deserialized: IssueState = serde_json::from_str(&json).unwrap();
+            assert_eq!(*state, deserialized);
+        }
+    }
+
+    // ── Backend tests ──
+
+    #[test]
+    fn test_backend_default() {
+        assert_eq!(Backend::default(), Backend::GitHub);
+    }
+
+    #[test]
+    fn test_backend_cmd() {
+        assert_eq!(Backend::GitHub.cmd(), "gh");
+        assert_eq!(Backend::GitLab.cmd(), "glab");
+    }
+
+    #[test]
+    fn test_backend_serde_roundtrip() {
+        for b in &[Backend::GitHub, Backend::GitLab] {
+            let json = serde_json::to_string(b).unwrap();
+            let deserialized: Backend = serde_json::from_str(&json).unwrap();
+            assert_eq!(*b, deserialized);
+        }
+    }
+
+    // ── Column::matches() tests ──
+
+    fn make_open_issue(labels: Vec<String>) -> Issue {
+        Issue {
+            number: 1,
+            title: "test".into(),
+            body: String::new(),
+            state: IssueState::Open,
+            labels,
+            assignees: vec![],
+            priority: None,
+            created_at: "now".into(),
+            updated_at: "now".into(),
+        }
+    }
+
+    fn make_closed_issue(labels: Vec<String>) -> Issue {
+        Issue {
+            number: 2,
+            title: "closed".into(),
+            body: String::new(),
+            state: IssueState::Closed,
+            labels,
+            assignees: vec![],
+            priority: None,
+            created_at: "now".into(),
+            updated_at: "now".into(),
+        }
+    }
+
+    #[test]
+    fn test_column_matches_label_exact() {
+        let col = Column {
+            id: "todo".into(),
+            title: "Todo".into(),
+            labels: vec!["todo".into()],
+            show_closed: false,
+            issues: vec![],
+        };
+        assert!(col.matches(&make_open_issue(vec!["todo".into()])));
+    }
+
+    #[test]
+    fn test_column_matches_any_of_labels() {
+        let col = Column {
+            id: "doing".into(),
+            title: "Doing".into(),
+            labels: vec!["doing".into(), "in-progress".into()],
+            show_closed: false,
+            issues: vec![],
+        };
+        assert!(col.matches(&make_open_issue(vec!["in-progress".into()])));
+    }
+
+    #[test]
+    fn test_column_matches_no_match() {
+        let col = Column {
+            id: "todo".into(),
+            title: "Todo".into(),
+            labels: vec!["todo".into()],
+            show_closed: false,
+            issues: vec![],
+        };
+        assert!(!col.matches(&make_open_issue(vec!["bug".into()])));
+    }
+
+    #[test]
+    fn test_column_matches_empty_labels_open_issue() {
+        let col = Column {
+            id: "custom".into(),
+            title: "Custom".into(),
+            labels: vec![],
+            show_closed: false,
+            issues: vec![],
+        };
+        assert!(!col.matches(&make_open_issue(vec!["anything".into()])));
+    }
+
+    #[test]
+    fn test_column_matches_closed_with_show_closed() {
+        let col = Column {
+            id: "done".into(),
+            title: "Done".into(),
+            labels: vec!["done".into()],
+            show_closed: true,
+            issues: vec![],
+        };
+        assert!(col.matches(&make_closed_issue(vec!["done".into()])));
+    }
+
+    #[test]
+    fn test_column_matches_closed_without_show_closed() {
+        let col = Column {
+            id: "todo".into(),
+            title: "Todo".into(),
+            labels: vec!["todo".into()],
+            show_closed: false,
+            issues: vec![],
+        };
+        assert!(!col.matches(&make_closed_issue(vec!["todo".into()])));
+    }
+
+    #[test]
+    fn test_column_matches_closed_show_closed_empty_labels() {
+        let col = Column {
+            id: "closed".into(),
+            title: "Closed".into(),
+            labels: vec![],
+            show_closed: true,
+            issues: vec![],
+        };
+        assert!(col.matches(&make_closed_issue(vec![])));
+    }
+
+    // ── Issue construction ──
+
+    #[test]
+    fn test_issue_fields() {
+        let issue = Issue {
+            number: 42,
+            title: "Test Issue".into(),
+            body: "Body text".into(),
+            state: IssueState::Open,
+            labels: vec!["bug".into()],
+            assignees: vec!["user1".into()],
+            priority: Some(Priority::P1),
+            created_at: "2024-01-01".into(),
+            updated_at: "2024-01-02".into(),
+        };
+        assert_eq!(issue.number, 42);
+        assert_eq!(issue.title, "Test Issue");
+        assert_eq!(issue.body, "Body text");
+        assert_eq!(issue.state, IssueState::Open);
+        assert_eq!(issue.labels, vec!["bug"]);
+        assert_eq!(issue.assignees, vec!["user1"]);
+        assert_eq!(issue.priority, Some(Priority::P1));
+    }
+
+    #[test]
+    fn test_column_matches_closed_no_show_closed_no_labels() {
+        let col = Column {
+            id: "custom".into(),
+            title: "Custom".into(),
+            labels: vec![],
+            show_closed: false,
+            issues: vec![],
+        };
+        assert!(!col.matches(&make_closed_issue(vec![])));
+    }
+
+    #[test]
+    fn test_column_matches_closed_no_show_closed_with_labels() {
+        let col = Column {
+            id: "todo".into(),
+            title: "Todo".into(),
+            labels: vec!["todo".into()],
+            show_closed: false,
+            issues: vec![],
+        };
+        // Closed check happens first — even with matching labels, returns false
+        assert!(!col.matches(&make_closed_issue(vec!["todo".into()])));
+    }
+
+    #[test]
+    fn test_column_matches_open_multi_label_issue() {
+        let col = Column {
+            id: "doing".into(),
+            title: "Doing".into(),
+            labels: vec!["doing".into(), "in-progress".into()],
+            show_closed: false,
+            issues: vec![],
+        };
+        assert!(col.matches(&make_open_issue(vec![
+            "bug".into(),
+            "in-progress".into(),
+            "urgent".into(),
+        ])));
+    }
+
+    #[test]
+    fn test_column_matches_case_sensitive() {
+        let col = Column {
+            id: "todo".into(),
+            title: "Todo".into(),
+            labels: vec!["TODO".into()],
+            show_closed: false,
+            issues: vec![],
+        };
+        assert!(!col.matches(&make_open_issue(vec!["todo".into()])));
+    }
+
+    #[test]
+    fn test_priority_from_labels_bogus_priority() {
+        let labels = vec!["priority:10".to_string()];
+        assert_eq!(Priority::from_labels(&labels), None);
+    }
+
+    #[test]
+    fn test_issue_serde_full_roundtrip() {
+        let issue = Issue {
+            number: 99,
+            title: "Roundtrip".into(),
+            body: "Body text".into(),
+            state: IssueState::Closed,
+            labels: vec!["bug".into(), "urgent".into()],
+            assignees: vec!["alice".into(), "bob".into()],
+            priority: Some(Priority::P0),
+            created_at: "2024-06-01T00:00:00Z".into(),
+            updated_at: "2024-06-02T00:00:00Z".into(),
+        };
+        let json = serde_json::to_string(&issue).unwrap();
+        let deserialized: Issue = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.number, 99);
+        assert_eq!(deserialized.title, "Roundtrip");
+        assert_eq!(deserialized.body, "Body text");
+        assert_eq!(deserialized.state, IssueState::Closed);
+        assert_eq!(deserialized.labels, vec!["bug", "urgent"]);
+        assert_eq!(deserialized.assignees, vec!["alice", "bob"]);
+        assert_eq!(deserialized.priority, Some(Priority::P0));
+    }
+
+    #[test]
+    fn test_issue_serde_body_default() {
+        let json = r#"{"number":5,"title":"No Body","state":"Open","labels":[],"assignees":[],"created_at":"now","updated_at":"now"}"#;
+        let issue: Issue = serde_json::from_str(json).unwrap();
+        assert_eq!(issue.number, 5);
+        assert_eq!(issue.body, ""); // #[serde(default)] kicks in
+    }
+
+    // ── Config::default() tests ──
+
+    #[test]
+    fn test_config_default_repo_empty() {
+        let cfg = Config::default();
+        assert!(cfg.repo.is_empty(), "default repo should be empty");
+    }
+
+    #[test]
+    fn test_config_default_backend_github() {
+        let cfg = Config::default();
+        assert_eq!(cfg.backend, Backend::GitHub);
+    }
+
+    #[test]
+    fn test_config_default_has_five_columns() {
+        let cfg = Config::default();
+        assert_eq!(cfg.columns.len(), 5);
+    }
+
+    #[test]
+    fn test_config_default_column_ids() {
+        let cfg = Config::default();
+        let ids: Vec<&str> = cfg.columns.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["todo", "doing", "review", "done", "closed"]);
+    }
+
+    #[test]
+    fn test_config_default_closed_column_show_closed() {
+        let cfg = Config::default();
+        assert!(cfg.columns[4].show_closed);
+        assert!(cfg.columns[4].labels.is_empty());
+    }
+
+    // ── Backend serde string tests ──
+
+    #[test]
+    fn test_backend_serde_github_string() {
+        let json = serde_json::to_string(&Backend::GitHub).unwrap();
+        assert_eq!(json, "\"github\"");
+    }
+
+    #[test]
+    fn test_backend_serde_gitlab_string() {
+        let json = serde_json::to_string(&Backend::GitLab).unwrap();
+        assert_eq!(json, "\"gitlab\"");
+    }
+
+    #[test]
+    fn test_backend_deserialize_github() {
+        let b: Backend = serde_json::from_str("\"github\"").unwrap();
+        assert_eq!(b, Backend::GitHub);
+    }
+
+    #[test]
+    fn test_backend_deserialize_gitlab() {
+        let b: Backend = serde_json::from_str("\"gitlab\"").unwrap();
+        assert_eq!(b, Backend::GitLab);
+    }
+
+    #[test]
+    fn test_backend_deserialize_invalid() {
+        let result: Result<Backend, _> = serde_json::from_str("\"bitbucket\"");
+        assert!(result.is_err(), "invalid backend should fail to deserialize");
+    }
+}

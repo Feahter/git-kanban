@@ -123,7 +123,7 @@ pub fn run(
 
                     match sync::fetch_issues(app.backend, &app.repo) {
                         Ok(issues) => {
-                            crate::config::write_cache(&issues, "now");
+                            crate::config::write_cache(&issues, &crate::chrono_now());
                             for (_, col) in app.columns.iter_mut().enumerate() {
                                 col.issues = issues
                                     .iter()
@@ -247,7 +247,12 @@ pub fn run(
                                 (app.selected_col + 1).min(app.columns.len().saturating_sub(1));
                             if next_idx != app.selected_col {
                                 let next_col = &app.columns[next_idx];
-                                match sync::move_issue(app.backend, &app.repo, issue.number, &col.labels, &next_col.labels) {
+                                // Only remove labels the issue actually has from this column
+                                let removable: Vec<String> = col.labels.iter()
+                                    .filter(|l| issue.labels.contains(l))
+                                    .cloned()
+                                    .collect();
+                                match sync::move_issue(app.backend, &app.repo, issue.number, &removable, &next_col.labels) {
                                     Ok(()) => {
                                         app.status_msg =
                                             format!("#{} moved to {}", issue.number, next_col.title);
@@ -277,7 +282,12 @@ pub fn run(
                             let prev_idx = app.selected_col.saturating_sub(1);
                             if prev_idx != app.selected_col {
                                 let prev_col = &app.columns[prev_idx];
-                                match sync::move_issue(app.backend, &app.repo, issue.number, &col.labels, &prev_col.labels) {
+                                // Only remove labels the issue actually has from this column
+                                let removable: Vec<String> = col.labels.iter()
+                                    .filter(|l| issue.labels.contains(l))
+                                    .cloned()
+                                    .collect();
+                                match sync::move_issue(app.backend, &app.repo, issue.number, &removable, &prev_col.labels) {
                                     Ok(()) => {
                                         app.status_msg =
                                             format!("#{} moved to {}", issue.number, prev_col.title);
@@ -431,7 +441,8 @@ fn draw(f: &mut Frame, app: &mut App, selected_row: usize) {
 
                 let max_title = (col_area.width.saturating_sub(12)) as usize;
                 let title = if issue.title.len() > max_title && max_title > 3 {
-                    format!("{}...", &issue.title[..max_title.saturating_sub(3)])
+                    let byte_end = issue.title.floor_char_boundary(max_title.saturating_sub(3));
+                    format!("{}...", &issue.title[..byte_end])
                 } else {
                     issue.title.clone()
                 };
@@ -467,7 +478,8 @@ fn draw(f: &mut Frame, app: &mut App, selected_row: usize) {
                     let available = col_area.width.saturating_sub(18) as usize;
                     let tags: String = extra_labels.iter().map(|l| format!(" [{}]", l)).collect();
                     if tags.len() > available && available > 8 {
-                        format!(" {}", &tags[..available.saturating_sub(1)])
+                        let byte_end = tags.floor_char_boundary(available.saturating_sub(1));
+                        format!(" {}", &tags[..byte_end])
                     } else if tags.len() > available {
                         String::new()
                     } else {

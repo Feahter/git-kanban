@@ -51,14 +51,6 @@ struct Cli {
     #[arg(long)]
     refresh: bool,
 
-    /// Suppress informational output (agent/cron mode)
-    #[arg(long)]
-    quiet: bool,
-
-    /// Show what would happen without executing (agent mode)
-    #[arg(long)]
-    dry_run: bool,
-
     /// Action to perform (agent mode — exits after completion)
     #[command(subcommand)]
     action: Option<Action>,
@@ -114,6 +106,11 @@ enum Action {
         #[arg(long)]
         remove_label: Vec<String>,
     },
+    /// Open an issue in the browser
+    Open {
+        /// Issue number
+        number: u64,
+    },
 }
 
 fn main() -> io::Result<()> {
@@ -145,36 +142,6 @@ fn main() -> io::Result<()> {
         let cmd = cfg.backend.cmd();
         eprintln!("Run '{} auth login' first.", cmd);
         std::process::exit(1);
-    }
-
-    // Dry-run mode: print what would happen and exit (agent mode)
-    if cli.dry_run {
-        if let Some(ref action) = cli.action {
-            match action {
-                Action::Create { title, label, .. } => {
-                    println!("[dry-run] create \"{}\" with labels {:?}", title, label);
-                }
-                Action::Close { number } => {
-                    println!("[dry-run] close #{}", number);
-                }
-                Action::Reopen { number } => {
-                    println!("[dry-run] reopen #{}", number);
-                }
-                Action::Comment { number, body } => {
-                    println!("[dry-run] comment on #{}: \"{}\"", number, body);
-                }
-                Action::Assign { number, user } => {
-                    match user {
-                        Some(u) => println!("[dry-run] assign #{} to {}", number, u),
-                        None => println!("[dry-run] assign #{} to self", number),
-                    }
-                }
-                Action::Move { number, add_label, remove_label } => {
-                    println!("[dry-run] move #{}: add={:?} remove={:?}", number, add_label, remove_label);
-                }
-            }
-            return Ok(());
-        }
     }
 
     // Execute action (agent mode) — runs first so it's explicit
@@ -213,6 +180,10 @@ fn main() -> io::Result<()> {
                     eprintln!("{}", e); std::process::exit(1);
                 }
             }
+            Action::Open { number } => {
+                sync::open_in_browser(cfg.backend, &cfg.repo, number);
+                println!("Opened #{} in browser", number);
+            }
         }
         return Ok(());
     }
@@ -245,22 +216,28 @@ fn main() -> io::Result<()> {
 
     // Refresh mode: cache was already updated above, just confirm
     if cli.refresh {
-        if !cli.quiet {
-            let count = issues.len();
-            println!("Cached {} issues from {}", count, cfg.repo);
-        }
+        let count = issues.len();
+        println!("Cached {} issues from {}", count, cfg.repo);
         return Ok(());
     }
 
     // Summary mode: per-column counts
     if cli.summary {
-        let counts: Vec<serde_json::Value> = cfg
-            .columns
-            .iter()
-            .filter(|col| {
-                // If --column is set, only show that column
-                cli.column.as_ref().map_or(true, |name| col.id == *name)
-            })
+        let target_col = cli.column.as_ref().and_then(|name| {
+            cfg.columns.iter().find(|c| c.id == *name)
+        });
+        let cols_iter: Box<dyn Iterator<Item = &types::Column>> = match &target_col {
+            Some(col) => Box::new(std::iter::once(*col)),
+            None => Box::new(cfg.columns.iter()),
+        };
+        let total_count: usize = cols_iter
+            .map(|col| issues.iter().filter(|i| col.matches(i)).count())
+            .sum();
+        let cols_iter2: Box<dyn Iterator<Item = &types::Column>> = match &target_col {
+            Some(col) => Box::new(std::iter::once(*col)),
+            None => Box::new(cfg.columns.iter()),
+        };
+        let counts: Vec<serde_json::Value> = cols_iter2
             .map(|col| serde_json::json!({
                 "id": col.id,
                 "title": col.title,
@@ -273,7 +250,7 @@ fn main() -> io::Result<()> {
                 Backend::GitHub => "github",
                 Backend::GitLab => "gitlab",
             },
-            "total": issues.len(),
+            "total": cli.column.is_some().then(|| (total_count as u64)).unwrap_or(issues.len() as u64),
             "columns": counts,
         }))
         .unwrap_or_default();
@@ -304,14 +281,12 @@ fn main() -> io::Result<()> {
             "issues": filtered,
         });
 
-        // Apply field selection filter to each issue item only
+        // Apply field selection filter — only to issues, not root
         if let Some(fields_str) = &cli.fields {
             let field_list: Vec<String> = fields_str.split(',').map(|s| s.trim().to_string()).collect();
-            let filtered_issues: Vec<serde_json::Value> = v["issues"]
-                .as_array()
-                .map(|arr| arr.iter().map(|issue| select_fields(issue, &field_list)).collect())
-                .unwrap_or_default();
-            v["issues"] = serde_json::Value::Array(filtered_issues);
+            if let Some(issues_arr) = v["issues"].as_array_mut() {
+                *issues_arr = issues_arr.iter().map(|i| select_fields(i, &field_list)).collect();
+            }
         }
 
         let json = serde_json::to_string_pretty(&v).unwrap_or_default();
@@ -433,5 +408,299 @@ mod tests {
         assert!(is_leap(2024));
         assert!(!is_leap(2100));
         assert!(is_leap(2000));
+    }
+
+    // ── CLI argument parsing tests ──
+
+    #[test]
+    fn test_cli_gitlab_flag() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--gitlab", "--repo", "user/repo"]).unwrap();
+        assert!(cli.gitlab);
+        assert_eq!(cli.repo.as_deref(), Some("user/repo"));
+    }
+
+    #[test]
+    fn test_cli_default_no_gitlab() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "user/repo"]).unwrap();
+        assert!(!cli.gitlab);
+    }
+
+    #[test]
+    fn test_cli_cached_flag() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--cached", "--repo", "u/r"]).unwrap();
+        assert!(cli.cached);
+    }
+
+    #[test]
+    fn test_cli_column_flag() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--column", "doing", "--repo", "u/r"]).unwrap();
+        assert_eq!(cli.column.as_deref(), Some("doing"));
+    }
+
+    #[test]
+    fn test_cli_fields_flag() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--fields", "number,title", "--repo", "u/r"]).unwrap();
+        assert_eq!(cli.fields.as_deref(), Some("number,title"));
+    }
+
+    #[test]
+    fn test_cli_summary_flag() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--summary", "--repo", "u/r"]).unwrap();
+        assert!(cli.summary);
+    }
+
+    #[test]
+    fn test_cli_json_flag() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--json", "--repo", "u/r"]).unwrap();
+        assert!(cli.json);
+    }
+
+    #[test]
+    fn test_cli_refresh_flag() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--refresh", "--repo", "u/r"]).unwrap();
+        assert!(cli.refresh);
+    }
+
+    // ── Subcommand tests ──
+
+    #[test]
+    fn test_cli_create_subcommand() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "create", "My Title"]).unwrap();
+        match cli.action.unwrap() {
+            Action::Create { title, body, label } => {
+                assert_eq!(title, "My Title");
+                assert!(body.is_none());
+                assert!(label.is_empty());
+            }
+            _ => panic!("expected Create action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_create_with_labels() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--repo", "u/r",
+            "create", "Bug fix", "--label", "bug", "--label", "urgent",
+        ]).unwrap();
+        match cli.action.unwrap() {
+            Action::Create { title, body, label } => {
+                assert_eq!(title, "Bug fix");
+                assert_eq!(label, vec!["bug", "urgent"]);
+                assert!(body.is_none());
+            }
+            _ => panic!("expected Create action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_create_with_body() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--repo", "u/r",
+            "create", "My Title", "--body", "Description text",
+        ]).unwrap();
+        match cli.action.unwrap() {
+            Action::Create { title, body, label } => {
+                assert_eq!(title, "My Title");
+                assert_eq!(body.as_deref(), Some("Description text"));
+            }
+            _ => panic!("expected Create action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_close_subcommand() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "close", "42"]).unwrap();
+        match cli.action.unwrap() {
+            Action::Close { number } => assert_eq!(number, 42),
+            _ => panic!("expected Close action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_reopen_subcommand() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "reopen", "7"]).unwrap();
+        match cli.action.unwrap() {
+            Action::Reopen { number } => assert_eq!(number, 7),
+            _ => panic!("expected Reopen action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_comment_subcommand() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "comment", "10", "--body", "nice work"]).unwrap();
+        match cli.action.unwrap() {
+            Action::Comment { number, body } => {
+                assert_eq!(number, 10);
+                assert_eq!(body, "nice work");
+            }
+            _ => panic!("expected Comment action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_assign_subcommand() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "assign", "42"]).unwrap();
+        match cli.action.unwrap() {
+            Action::Assign { number, user } => {
+                assert_eq!(number, 42);
+                assert!(user.is_none());
+            }
+            _ => panic!("expected Assign action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_assign_with_user() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "assign", "42", "--user", "someone"]).unwrap();
+        match cli.action.unwrap() {
+            Action::Assign { number, user } => {
+                assert_eq!(number, 42);
+                assert_eq!(user.as_deref(), Some("someone"));
+            }
+            _ => panic!("expected Assign action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_move_subcommand() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--repo", "u/r",
+            "move", "42", "--add-label", "doing", "--remove-label", "todo",
+        ]).unwrap();
+        match cli.action.unwrap() {
+            Action::Move { number, add_label, remove_label } => {
+                assert_eq!(number, 42);
+                assert_eq!(add_label, vec!["doing"]);
+                assert_eq!(remove_label, vec!["todo"]);
+            }
+            _ => panic!("expected Move action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_move_multiple_labels() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--repo", "u/r",
+            "move", "42",
+            "--add-label", "doing", "--add-label", "wip",
+            "--remove-label", "todo", "--remove-label", "backlog",
+        ]).unwrap();
+        match cli.action.unwrap() {
+            Action::Move { number, add_label, remove_label } => {
+                assert_eq!(number, 42);
+                assert_eq!(add_label, vec!["doing", "wip"]);
+                assert_eq!(remove_label, vec!["todo", "backlog"]);
+            }
+            _ => panic!("expected Move action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_create_with_body_and_labels() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--repo", "u/r",
+            "create", "Feature", "--body", "Description", "--label", "enhancement",
+        ]).unwrap();
+        match cli.action.unwrap() {
+            Action::Create { title, body, label } => {
+                assert_eq!(title, "Feature");
+                assert_eq!(body.as_deref(), Some("Description"));
+                assert_eq!(label, vec!["enhancement"]);
+            }
+            _ => panic!("expected Create action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_comment_requires_body() {
+        let result = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "comment", "10"]);
+        assert!(result.is_err(), "comment subcommand should require --body");
+    }
+
+    #[test]
+    fn test_chrono_now_format() {
+        let result = chrono_now();
+        // ISO 8601: 2024-01-15T12:30:00Z (always 20 chars with zero-padding)
+        assert_eq!(result.len(), 20, "expected 20 chars, got {}: {}", result.len(), result);
+        assert!(result.ends_with('Z'), "expected Z suffix");
+        assert_eq!(&result[4..5], "-", "expected dash after year");
+        assert_eq!(&result[7..8], "-", "expected dash after month");
+        assert_eq!(&result[10..11], "T", "expected T separator");
+        assert_eq!(&result[13..14], ":", "expected colon after hours");
+        assert_eq!(&result[16..17], ":", "expected colon after minutes");
+    }
+
+    #[test]
+    fn test_cli_parse_without_repo() {
+        // --repo is optional at parse time (Option<String>); error is runtime
+        let cli = Cli::try_parse_from(&["git-kanban", "--json"]).unwrap();
+        assert!(cli.repo.is_none());
+        assert!(cli.json);
+    }
+
+    #[test]
+    fn test_cli_parse_json_with_column() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--json", "--column", "doing", "--repo", "u/r"]).unwrap();
+        assert!(cli.json);
+        assert_eq!(cli.column.as_deref(), Some("doing"));
+        assert_eq!(cli.repo.as_deref(), Some("u/r"));
+    }
+
+    #[test]
+    fn test_cli_parse_summary_with_column() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--summary", "--column", "todo", "--repo", "u/r"]).unwrap();
+        assert!(cli.summary);
+        assert_eq!(cli.column.as_deref(), Some("todo"));
+    }
+
+    #[test]
+    fn test_cli_parse_json_fields_with_column() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--json", "--fields", "number,title",
+            "--column", "doing", "--repo", "u/r",
+        ]).unwrap();
+        assert!(cli.json);
+        assert_eq!(cli.fields.as_deref(), Some("number,title"));
+        assert_eq!(cli.column.as_deref(), Some("doing"));
+    }
+
+    #[test]
+    fn test_cli_parse_refresh_cached_conflict() {
+        // Both --refresh and --cached are flags; they can be set together
+        // at parse time (runtime chooses based on order)
+        let cli = Cli::try_parse_from(&["git-kanban", "--refresh", "--cached", "--repo", "u/r"]).unwrap();
+        assert!(cli.refresh);
+        assert!(cli.cached);
+    }
+
+    #[test]
+    fn test_cli_parse_create_with_multiple_labels() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--repo", "u/r",
+            "create", "New Feature", "--label", "enhancement",
+            "--label", "feature", "--body", "A new feature",
+        ]).unwrap();
+        match cli.action.unwrap() {
+            Action::Create { title, body, label } => {
+                assert_eq!(title, "New Feature");
+                assert_eq!(body.as_deref(), Some("A new feature"));
+                assert_eq!(label, vec!["enhancement", "feature"]);
+            }
+            _ => panic!("expected Create action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_move_no_labels() {
+        // Move with no --add-label and no --remove-label is valid but degenerate
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "move", "42"]).unwrap();
+        match cli.action.unwrap() {
+            Action::Move { number, add_label, remove_label } => {
+                assert_eq!(number, 42);
+                assert!(add_label.is_empty());
+                assert!(remove_label.is_empty());
+            }
+            _ => panic!("expected Move action"),
+        }
     }
 }

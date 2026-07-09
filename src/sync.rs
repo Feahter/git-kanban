@@ -129,7 +129,7 @@ fn fetch_gh_issues(repo: &str) -> Result<Vec<Issue>, String> {
             "--repo", repo,
             "--state", "all",
             "--json", "number,title,body,state,labels,assignees,createdAt,updatedAt",
-            "--limit", "200",
+            "--limit", "1000",
         ])
         .output()
         .map_err(|e| format!("Failed to run gh: {}", e))?;

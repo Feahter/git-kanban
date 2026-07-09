@@ -20,7 +20,7 @@ git-kanban --json --repo owner/name
 git-kanban --json --repo owner/name --cached
 
 # All issues (GitLab)
-git-kanban --json --repo namespace/project --platform gitlab
+git-kanban --json --repo namespace/project --gitlab
 
 # Filter by column
 git-kanban --json --repo owner/name --column todo
