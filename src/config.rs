@@ -142,6 +142,19 @@ pub fn read_cache(repo: &str) -> Option<Vec<crate::types::Issue>> {
     Some(issues)
 }
 
+/// Read cache and return (issues, last_sync) metadata.
+pub fn read_cache_meta(repo: &str) -> Option<(Vec<crate::types::Issue>, String)> {
+    let path = cache_file_path(repo);
+    if !path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let issues: Vec<crate::types::Issue> = serde_json::from_value(parsed.get("issues")?.clone()).ok()?;
+    let last_sync: String = parsed.get("last_sync")?.as_str()?.to_string();
+    Some((issues, last_sync))
+}
+
 // ── Unit tests ──
 #[cfg(test)]
 mod tests {

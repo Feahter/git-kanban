@@ -125,7 +125,7 @@ impl Column {
         if self.labels.is_empty() {
             return false;
         }
-        self.labels.iter().any(|l| issue.labels.contains(l))
+        self.labels.iter().any(|l| issue.labels.iter().any(|il| il.eq_ignore_ascii_case(l)))
     }
 }
 
@@ -487,7 +487,7 @@ mod tests {
             show_closed: false,
             issues: vec![],
         };
-        assert!(!col.matches(&make_open_issue(vec!["todo".into()])));
+        assert!(col.matches(&make_open_issue(vec!["todo".into()])));
     }
 
     #[test]

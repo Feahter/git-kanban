@@ -51,6 +51,10 @@ struct Cli {
     #[arg(long)]
     refresh: bool,
 
+    /// Preview the action without executing (dry run)
+    #[arg(long)]
+    dry_run: bool,
+
     /// Action to perform (agent mode — exits after completion)
     #[command(subcommand)]
     action: Option<Action>,
@@ -148,20 +152,28 @@ fn main() -> io::Result<()> {
     if let Some(action) = cli.action {
         match action {
             Action::Create { title, body, label } => {
+                if cli.dry_run {
+                    println!("{}", serde_json::json!({"action":"create","title":title,"labels":label,"dry_run":true}));
+                    return Ok(());
+                }
                 match sync::create_issue(cfg.backend, &cfg.repo, &title, body.as_deref(), &label) {
                     Ok(num) => {
-                        println!("{}", num);
                         // Refresh cache after write
                         if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
                             if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
                                 eprintln!("Warning: failed to write cache");
                             }
                         }
+                        println!("{}", serde_json::json!({"action":"create","number":num,"ok":true}));
                     }
                     Err(e) => { eprintln!("{}", e); std::process::exit(1); }
                 }
             }
             Action::Close { number } => {
+                if cli.dry_run {
+                    println!("{}", serde_json::json!({"action":"close","number":number,"dry_run":true}));
+                    return Ok(());
+                }
                 if let Err(e) = sync::close_issue(cfg.backend, &cfg.repo, number) {
                     eprintln!("{}", e); std::process::exit(1);
                 }
@@ -171,8 +183,13 @@ fn main() -> io::Result<()> {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
+                println!("{}", serde_json::json!({"action":"close","number":number,"ok":true}));
             }
             Action::Reopen { number } => {
+                if cli.dry_run {
+                    println!("{}", serde_json::json!({"action":"reopen","number":number,"dry_run":true}));
+                    return Ok(());
+                }
                 if let Err(e) = sync::reopen_issue(cfg.backend, &cfg.repo, number) {
                     eprintln!("{}", e); std::process::exit(1);
                 }
@@ -182,17 +199,30 @@ fn main() -> io::Result<()> {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
+                println!("{}", serde_json::json!({"action":"reopen","number":number,"ok":true}));
             }
             Action::Comment { number, body } => {
+                if cli.dry_run {
+                    println!("{}", serde_json::json!({"action":"comment","number":number,"body":body,"dry_run":true}));
+                    return Ok(());
+                }
                 if let Err(e) = sync::add_comment(cfg.backend, &cfg.repo, number, &body) {
                     eprintln!("{}", e); std::process::exit(1);
                 }
                 // Refresh cache after write
                 if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
-                    config::write_cache(&issues, &chrono_now(), &cfg.repo);
+                    if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
+                        eprintln!("Warning: failed to write cache");
+                    }
                 }
+                println!("{}", serde_json::json!({"action":"comment","number":number,"ok":true}));
             }
             Action::Assign { number, user } => {
+                if cli.dry_run {
+                    let target = user.as_deref().unwrap_or("self");
+                    println!("{}", serde_json::json!({"action":"assign","number":number,"user":target,"dry_run":true}));
+                    return Ok(());
+                }
                 let result = match user {
                     Some(ref u) => sync::assign_user(cfg.backend, &cfg.repo, number, u),
                     None => sync::assign_self(cfg.backend, &cfg.repo, number),
@@ -204,8 +234,13 @@ fn main() -> io::Result<()> {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
+                println!("{}", serde_json::json!({"action":"assign","number":number,"ok":true}));
             }
             Action::Move { number, add_label, remove_label } => {
+                if cli.dry_run {
+                    println!("{}", serde_json::json!({"action":"move","number":number,"add_label":add_label,"remove_label":remove_label,"dry_run":true}));
+                    return Ok(());
+                }
                 if let Err(e) = sync::move_issue(cfg.backend, &cfg.repo, number, &remove_label, &add_label) {
                     eprintln!("{}", e); std::process::exit(1);
                 }
@@ -215,35 +250,38 @@ fn main() -> io::Result<()> {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
+                println!("{}", serde_json::json!({"action":"move","number":number,"ok":true}));
             }
             Action::Open { number } => {
                 sync::open_in_browser(cfg.backend, &cfg.repo, number);
-                println!("Opened #{} in browser", number);
+                println!("{}", serde_json::json!({"action":"open","number":number,"ok":true}));
             }
         }
         return Ok(());
     }
 
     // Resolve issues source: cached or live fetch
-    let issues = if cli.cached {
-        config::read_cache(&cfg.repo)
-            .ok_or_else(|| {
+    let (issues, from_cache, cached_at) = if cli.cached {
+        match config::read_cache_meta(&cfg.repo) {
+            Some((issues, last_sync)) => (issues, true, last_sync),
+            None => {
                 eprintln!("No cache found. Run without --cached first, or use --refresh.");
                 std::process::exit(1);
-            })
-            .unwrap()
+            }
+        }
     } else {
         match sync::fetch_issues(cfg.backend, &cfg.repo) {
             Ok(issues) => {
-                if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
+                let now = chrono_now();
+                if !config::write_cache(&issues, &now, &cfg.repo) {
                     eprintln!("Warning: failed to write cache");
                 }
-                issues
+                (issues, false, now)
             }
             Err(e) => {
-                if let Some(cached) = config::read_cache(&cfg.repo) {
+                if let Some((cached, last_sync)) = config::read_cache_meta(&cfg.repo) {
                     eprintln!("Warning: live fetch failed ({}), using cached data", e);
-                    cached
+                    (cached, true, last_sync)
                 } else {
                     eprintln!("{}", e);
                     std::process::exit(1);
@@ -315,6 +353,8 @@ fn main() -> io::Result<()> {
                 Backend::GitHub => "github",
                 Backend::GitLab => "gitlab",
             },
+            "from_cache": from_cache,
+            "cached_at": cached_at,
             "total": filtered.len(),
             "issues": filtered,
         });

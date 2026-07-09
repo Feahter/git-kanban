@@ -96,7 +96,24 @@ pub fn add_comment(backend: Backend, repo: &str, number: u64, body: &str) -> Res
 pub fn assign_self(backend: Backend, repo: &str, number: u64) -> Result<(), String> {
     match backend {
         Backend::GitHub => run_cli_cmd("gh", &["issue", "edit", &number.to_string(), "--repo", repo, "--add-assignee", "@me"]),
-        Backend::GitLab => Err("Assign self: use glab issue update --assignee <username> or browser".into()),
+        Backend::GitLab => {
+            // Get current username via glab API, then assign
+            let output = Command::new("glab")
+                .args(["api", "/user"])
+                .output()
+                .map_err(|e| format!("Failed to run glab: {}", e))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("glab api error: {}", stderr.trim()));
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let v: serde_json::Value = serde_json::from_str(&stdout)
+                .map_err(|e| format!("JSON parse error: {}", e))?;
+            let username = v.get("username")
+                .and_then(|u| u.as_str())
+                .ok_or_else(|| "Could not determine GitLab username".to_string())?;
+            run_cli_cmd("glab", &["issue", "update", &number.to_string(), "--repo", repo, "--assignee", username])
+        }
     }
 }
 
