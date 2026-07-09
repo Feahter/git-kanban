@@ -55,6 +55,18 @@ struct Cli {
     #[arg(long)]
     dry_run: bool,
 
+    /// Filter issues by keyword in title or body (case-insensitive)
+    #[arg(long)]
+    search: Option<String>,
+
+    /// Sort output by field: created or updated
+    #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(["created", "updated"]))]
+    sort: Option<String>,
+
+    /// Omit issue body from JSON output (shorter)
+    #[arg(long)]
+    brief: bool,
+
     /// Action to perform (agent mode — exits after completion)
     #[command(subcommand)]
     action: Option<Action>,
@@ -73,15 +85,15 @@ enum Action {
         #[arg(long)]
         label: Vec<String>,
     },
-    /// Close an issue
+    /// Close an issue (supports comma-separated: "12,15,18")
     Close {
-        /// Issue number
-        number: u64,
+        /// Issue number(s), comma-separated
+        number: String,
     },
-    /// Reopen a closed issue
+    /// Reopen a closed issue (supports comma-separated)
     Reopen {
-        /// Issue number
-        number: u64,
+        /// Issue number(s), comma-separated
+        number: String,
     },
     /// Add a comment to an issue
     Comment {
@@ -115,6 +127,25 @@ enum Action {
         /// Issue number
         number: u64,
     },
+    /// Edit an issue (title, body, or labels)
+    Edit {
+        /// Issue number
+        number: u64,
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+        /// New body/description
+        #[arg(long)]
+        body: Option<String>,
+        /// Labels to add (repeatable)
+        #[arg(long)]
+        add_label: Vec<String>,
+        /// Labels to remove (repeatable)
+        #[arg(long)]
+        remove_label: Vec<String>,
+    },
+    /// List all labels in the repository
+    Labels,
 }
 
 fn main() -> io::Result<()> {
@@ -158,7 +189,6 @@ fn main() -> io::Result<()> {
                 }
                 match sync::create_issue(cfg.backend, &cfg.repo, &title, body.as_deref(), &label) {
                     Ok(num) => {
-                        // Refresh cache after write
                         if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
                             if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
                                 eprintln!("Warning: failed to write cache");
@@ -170,36 +200,54 @@ fn main() -> io::Result<()> {
                 }
             }
             Action::Close { number } => {
+                let nums: Vec<u64> = number.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                if nums.is_empty() {
+                    eprintln!("Error: invalid issue number(s): '{}'", number);
+                    std::process::exit(1);
+                }
                 if cli.dry_run {
-                    println!("{}", serde_json::json!({"action":"close","number":number,"dry_run":true}));
+                    println!("{}", serde_json::json!({"action":"close","numbers":nums,"dry_run":true}));
                     return Ok(());
                 }
-                if let Err(e) = sync::close_issue(cfg.backend, &cfg.repo, number) {
-                    eprintln!("{}", e); std::process::exit(1);
+                let mut failed = Vec::new();
+                for n in &nums {
+                    if let Err(e) = sync::close_issue(cfg.backend, &cfg.repo, *n) {
+                        eprintln!("Error closing #{}: {}", n, e);
+                        failed.push(*n);
+                    }
                 }
-                // Refresh cache after write
                 if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
                     if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
-                println!("{}", serde_json::json!({"action":"close","number":number,"ok":true}));
+                println!("{}", serde_json::json!({"action":"close","numbers":nums,"ok":failed.is_empty(),"failed":failed}));
+                if !failed.is_empty() { std::process::exit(1); }
             }
             Action::Reopen { number } => {
+                let nums: Vec<u64> = number.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                if nums.is_empty() {
+                    eprintln!("Error: invalid issue number(s): '{}'", number);
+                    std::process::exit(1);
+                }
                 if cli.dry_run {
-                    println!("{}", serde_json::json!({"action":"reopen","number":number,"dry_run":true}));
+                    println!("{}", serde_json::json!({"action":"reopen","numbers":nums,"dry_run":true}));
                     return Ok(());
                 }
-                if let Err(e) = sync::reopen_issue(cfg.backend, &cfg.repo, number) {
-                    eprintln!("{}", e); std::process::exit(1);
+                let mut failed = Vec::new();
+                for n in &nums {
+                    if let Err(e) = sync::reopen_issue(cfg.backend, &cfg.repo, *n) {
+                        eprintln!("Error reopening #{}: {}", n, e);
+                        failed.push(*n);
+                    }
                 }
-                // Refresh cache after write
                 if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
                     if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
-                println!("{}", serde_json::json!({"action":"reopen","number":number,"ok":true}));
+                println!("{}", serde_json::json!({"action":"reopen","numbers":nums,"ok":failed.is_empty(),"failed":failed}));
+                if !failed.is_empty() { std::process::exit(1); }
             }
             Action::Comment { number, body } => {
                 if cli.dry_run {
@@ -255,6 +303,30 @@ fn main() -> io::Result<()> {
             Action::Open { number } => {
                 sync::open_in_browser(cfg.backend, &cfg.repo, number);
                 println!("{}", serde_json::json!({"action":"open","number":number,"ok":true}));
+            }
+            Action::Edit { number, title, body, add_label, remove_label } => {
+                if cli.dry_run {
+                    println!("{}", serde_json::json!({"action":"edit","number":number,"title":title,"body":body,"add_label":add_label,"remove_label":remove_label,"dry_run":true}));
+                    return Ok(());
+                }
+                if let Err(e) = sync::edit_issue(cfg.backend, &cfg.repo, number, title.as_deref(), body.as_deref(), &add_label, &remove_label) {
+                    eprintln!("{}", e); std::process::exit(1);
+                }
+                if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
+                    if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
+                        eprintln!("Warning: failed to write cache");
+                    }
+                }
+                println!("{}", serde_json::json!({"action":"edit","number":number,"ok":true}));
+            }
+            Action::Labels => {
+                let labels = sync::list_labels(cfg.backend, &cfg.repo);
+                match labels {
+                    Ok(labels) => {
+                        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"labels": labels})).unwrap_or_default());
+                    }
+                    Err(e) => { eprintln!("{}", e); std::process::exit(1); }
+                }
             }
         }
         return Ok(());
@@ -340,10 +412,25 @@ fn main() -> io::Result<()> {
     });
 
     // Filter issues to the column if specified
-    let filtered: Vec<types::Issue> = match target_col {
+    let mut filtered: Vec<types::Issue> = match target_col {
         Some(col) => issues.iter().filter(|i| col.matches(i)).cloned().collect(),
         None => issues,
     };
+
+    // Search filter: keyword in title or body (case-insensitive)
+    if let Some(keyword) = &cli.search {
+        let kw = keyword.to_lowercase();
+        filtered.retain(|i| i.title.to_lowercase().contains(&kw) || i.body.to_lowercase().contains(&kw));
+    }
+
+    // Sort if requested
+    if let Some(sort_field) = &cli.sort {
+        match sort_field.as_str() {
+            "created" => filtered.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
+            "updated" => filtered.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
+            _ => {}
+        }
+    }
 
     // JSON mode: output filtered issues and exit
     if cli.json {
@@ -364,6 +451,17 @@ fn main() -> io::Result<()> {
             let field_list: Vec<String> = fields_str.split(',').map(|s| s.trim().to_string()).collect();
             if let Some(issues_arr) = v["issues"].as_array_mut() {
                 *issues_arr = issues_arr.iter().map(|i| select_fields(i, &field_list)).collect();
+            }
+        }
+
+        // Apply --brief: remove body
+        if cli.brief {
+            if let Some(issues_arr) = v["issues"].as_array_mut() {
+                for issue in issues_arr.iter_mut() {
+                    if let Some(obj) = issue.as_object_mut() {
+                        obj.remove("body");
+                    }
+                }
             }
         }
 
@@ -589,7 +687,7 @@ mod tests {
     fn test_cli_close_subcommand() {
         let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "close", "42"]).unwrap();
         match cli.action.unwrap() {
-            Action::Close { number } => assert_eq!(number, 42),
+            Action::Close { number } => assert_eq!(number, "42"),
             _ => panic!("expected Close action"),
         }
     }
@@ -598,7 +696,7 @@ mod tests {
     fn test_cli_reopen_subcommand() {
         let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "reopen", "7"]).unwrap();
         match cli.action.unwrap() {
-            Action::Reopen { number } => assert_eq!(number, 7),
+            Action::Reopen { number } => assert_eq!(number, "7"),
             _ => panic!("expected Reopen action"),
         }
     }

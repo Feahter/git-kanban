@@ -137,6 +137,67 @@ pub fn open_in_browser(backend: Backend, repo: &str, number: u64) {
     Command::new("open").arg(&url).output().ok();
 }
 
+pub fn edit_issue(backend: Backend, repo: &str, number: u64, title: Option<&str>, body: Option<&str>, add_labels: &[String], remove_labels: &[String]) -> Result<(), String> {
+    match backend {
+        Backend::GitHub => {
+            let mut args = vec!["issue".to_string(), "edit".to_string(), number.to_string(), "--repo".to_string(), repo.to_string()];
+            if let Some(t) = title { args.push("--title".into()); args.push(t.into()); }
+            if let Some(b) = body { args.push("--body".into()); args.push(b.into()); }
+            if !add_labels.is_empty() { args.push("--add-label".into()); args.push(add_labels.join(",")); }
+            if !remove_labels.is_empty() { args.push("--remove-label".into()); args.push(remove_labels.join(",")); }
+            let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            run_cli_cmd("gh", &str_args)
+        }
+        Backend::GitLab => {
+            let mut args = vec!["issue".to_string(), "update".to_string(), number.to_string(), "--repo".to_string(), repo.to_string()];
+            if let Some(t) = title { args.push("--title".into()); args.push(t.into()); }
+            if let Some(b) = body { args.push("--description".into()); args.push(b.into()); }
+            if !add_labels.is_empty() { args.push("--label".into()); args.push(add_labels.join(",")); }
+            if !remove_labels.is_empty() { args.push("--unlabel".into()); args.push(remove_labels.join(",")); }
+            let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            run_cli_cmd("glab", &str_args)
+        }
+    }
+}
+
+pub fn list_labels(backend: Backend, repo: &str) -> Result<Vec<String>, String> {
+    match backend {
+        Backend::GitHub => {
+            let output = Command::new("gh")
+                .args(["label", "list", "--repo", repo, "--json", "name", "--limit", "200"])
+                .output()
+                .map_err(|e| format!("Failed to run gh: {}", e))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("gh error: {}", stderr.trim()));
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            #[derive(serde::Deserialize)]
+            struct GhLabel { name: String }
+            let labels: Vec<GhLabel> = serde_json::from_str(&stdout)
+                .map_err(|e| format!("JSON parse error: {}", e))?;
+            Ok(labels.into_iter().map(|l| l.name).collect())
+        }
+        Backend::GitLab => {
+            let output = Command::new("glab")
+                .args(["label", "list", "--repo", repo])
+                .output()
+                .map_err(|e| format!("Failed to run glab: {}", e))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("glab error: {}", stderr.trim()));
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // glab label list returns lines of "name (color)" — extract the name
+            let labels: Vec<String> = stdout.lines()
+                .filter_map(|line| line.split_once('(').map(|(name, _)| name.trim().to_string()))
+                .filter(|name| !name.is_empty())
+                .collect();
+            Ok(labels)
+        }
+    }
+}
+
 // ── GitHub implementations ──────────────────────────────────
 
 fn fetch_gh_issues(repo: &str) -> Result<Vec<Issue>, String> {
