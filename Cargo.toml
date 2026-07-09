@@ -3,6 +3,7 @@ name = "git-kanban"
 version = "0.1.0"
 edition = "2021"
 description = "Terminal kanban board for Git platforms — ratatui TUI, gh/glab CLI backend, JSON cache"
+license = "MIT"
 
 [dependencies]
 ratatui = "0.30"

@@ -3,6 +3,9 @@
 > **858KB single binary. <10ms startup. Zero runtime deps. Agent-friendly JSON mode.**
 > Terminal kanban board for Git platforms (GitHub / GitLab).
 
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
+
 ```bash
 git-kanban --repo owner/name           # TUI kanban board
 git-kanban --json --repo R --cached    # Agent: read issues in <10ms
@@ -182,4 +185,13 @@ Or set `"backend": "gitlab"` in `~/.config/git-kanban/config.json`.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — small scope, high polish, no unnecessary deps.
+
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md)
