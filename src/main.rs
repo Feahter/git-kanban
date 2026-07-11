@@ -351,6 +351,209 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    // ── Multi-repo refresh ──
+    if cli.refresh && repos.len() > 1 {
+        for repo in &repos {
+            let (issues, _from_cache, _cached_at) = if cli.cached {
+                match config::read_cache_meta(repo) {
+                    Some((issues, last_sync)) => (issues, true, last_sync),
+                    None => {
+                        eprintln!("No cache found for {}. Run without --cached first, or use --refresh.", repo);
+                        continue;
+                    }
+                }
+            } else {
+                match sync::fetch_issues(cfg.backend, repo) {
+                    Ok(issues) => {
+                        let now = chrono_now();
+                        if !config::write_cache(&issues, &now, repo) {
+                            eprintln!("Warning: failed to write cache for {}", repo);
+                        }
+                        (issues, false, now)
+                    }
+                    Err(e) => {
+                        if let Some((cached, last_sync)) = config::read_cache_meta(repo) {
+                            eprintln!("Warning: live fetch failed for {} ({}), using cached data", repo, e);
+                            (cached, true, last_sync)
+                        } else {
+                            eprintln!("Error fetching {}: {}", repo, e);
+                            continue;
+                        }
+                    }
+                }
+            };
+            let count = issues.len();
+            println!("Cached {} issues from {}", count, repo);
+        }
+        return Ok(());
+    }
+
+    // ── Multi-repo JSON ──
+    if cli.json && repos.len() > 1 {
+        let mut repositories = Vec::new();
+        let mut grand_total = 0usize;
+        for repo in &repos {
+            let (issues, from_cache, cached_at) = if cli.cached {
+                match config::read_cache_meta(repo) {
+                    Some((issues, last_sync)) => (issues, true, last_sync),
+                    None => {
+                        eprintln!("No cache found for {}. Run without --cached first, or use --refresh.", repo);
+                        continue;
+                    }
+                }
+            } else {
+                match sync::fetch_issues(cfg.backend, repo) {
+                    Ok(issues) => {
+                        let now = chrono_now();
+                        if !config::write_cache(&issues, &now, repo) {
+                            eprintln!("Warning: failed to write cache for {}", repo);
+                        }
+                        (issues, false, now)
+                    }
+                    Err(e) => {
+                        if let Some((cached, last_sync)) = config::read_cache_meta(repo) {
+                            eprintln!("Warning: live fetch failed for {} ({}), using cached data", repo, e);
+                            (cached, true, last_sync)
+                        } else {
+                            eprintln!("Error fetching {}: {}", repo, e);
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            let target_col = cli.column.as_ref().and_then(|name| {
+                cfg.columns.iter().find(|c| c.id == *name)
+            });
+            let mut filtered: Vec<types::Issue> = match target_col {
+                Some(col) => issues.iter().filter(|i| col.matches(i)).cloned().collect(),
+                None => issues,
+            };
+
+            if let Some(keyword) = &cli.search {
+                let kw = keyword.to_lowercase();
+                filtered.retain(|i| i.title.to_lowercase().contains(&kw) || i.body.to_lowercase().contains(&kw));
+            }
+
+            if let Some(sort_field) = &cli.sort {
+                match sort_field.as_str() {
+                    "created" => filtered.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
+                    "updated" => filtered.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
+                    _ => {}
+                }
+            }
+
+            let repo_total = filtered.len();
+            grand_total += repo_total;
+
+            let mut repo_obj = serde_json::json!({
+                "repo": repo,
+                "backend": match cfg.backend {
+                    Backend::GitHub => "github",
+                    Backend::GitLab => "gitlab",
+                },
+                "from_cache": from_cache,
+                "cached_at": cached_at,
+                "total": repo_total,
+                "issues": filtered,
+            });
+
+            if let Some(fields_str) = &cli.fields {
+                let field_list: Vec<String> = fields_str.split(',').map(|s| s.trim().to_string()).collect();
+                if let Some(issues_arr) = repo_obj["issues"].as_array_mut() {
+                    *issues_arr = issues_arr.iter().map(|i| select_fields(i, &field_list)).collect();
+                }
+            }
+
+            if cli.brief {
+                if let Some(issues_arr) = repo_obj["issues"].as_array_mut() {
+                    for issue in issues_arr.iter_mut() {
+                        if let Some(obj) = issue.as_object_mut() {
+                            obj.remove("body");
+                        }
+                    }
+                }
+            }
+
+            repositories.push(repo_obj);
+        }
+
+        let output = serde_json::json!({
+            "repositories": repositories,
+            "total": grand_total,
+        });
+        let json = match serde_json::to_string_pretty(&output) {
+            Ok(s) => s,
+            Err(e) => format!("{{\"error\":\"serialization failed: {}\"}}", e),
+        };
+        println!("{}", json);
+        return Ok(());
+    }
+
+    // ── Multi-repo summary ──
+    if cli.summary && repos.len() > 1 {
+        let mut repositories = Vec::new();
+        for repo in &repos {
+            let (issues, _from_cache, _cached_at) = if cli.cached {
+                match config::read_cache_meta(repo) {
+                    Some((issues, last_sync)) => (issues, true, last_sync),
+                    None => {
+                        eprintln!("No cache found for {}. Run without --cached first, or use --refresh.", repo);
+                        continue;
+                    }
+                }
+            } else {
+                match sync::fetch_issues(cfg.backend, repo) {
+                    Ok(issues) => {
+                        let now = chrono_now();
+                        if !config::write_cache(&issues, &now, repo) {
+                            eprintln!("Warning: failed to write cache for {}", repo);
+                        }
+                        (issues, false, now)
+                    }
+                    Err(e) => {
+                        if let Some((cached, last_sync)) = config::read_cache_meta(repo) {
+                            eprintln!("Warning: live fetch failed for {} ({}), using cached data", repo, e);
+                            (cached, true, last_sync)
+                        } else {
+                            eprintln!("Error fetching {}: {}", repo, e);
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            let target_col = cli.column.as_ref().and_then(|name| {
+                cfg.columns.iter().find(|c| c.id == *name)
+            });
+            let counts: Vec<serde_json::Value> = {
+                let cols_iter: Box<dyn Iterator<Item = &types::Column>> = match &target_col {
+                    Some(col) => Box::new(std::iter::once(*col)),
+                    None => Box::new(cfg.columns.iter()),
+                };
+                cols_iter
+                    .map(|col| serde_json::json!({
+                        "id": col.id,
+                        "title": col.title,
+                        "count": issues.iter().filter(|i| col.matches(i)).count(),
+                    }))
+                    .collect()
+            };
+
+            repositories.push(serde_json::json!({
+                "repo": repo,
+                "columns": counts,
+            }));
+        }
+
+        let json = match serde_json::to_string_pretty(&serde_json::json!({"repositories": repositories})) {
+            Ok(s) => s,
+            Err(e) => format!("{{\"error\":\"serialization failed: {}\"}}", e),
+        };
+        println!("{}", json);
+        return Ok(());
+    }
+
     // Resolve issues source: cached or live fetch
     let (issues, from_cache, cached_at) = if cli.cached {
         match config::read_cache_meta(&cfg.repo) {
@@ -501,7 +704,7 @@ fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = ui::run(&mut terminal, cfg.repo, cfg.backend, cfg.columns);
+    let result = ui::run(&mut terminal, repos, cfg.backend, cfg.columns);
 
     // Restore terminal
     disable_raw_mode()?;
