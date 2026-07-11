@@ -64,6 +64,17 @@ pub fn load() -> Config {
         }
     }
 
+    // Load repos array (takes priority over single repo)
+    if let Some(repos) = parsed.get("repos").and_then(|v| v.as_array()) {
+        let list: Vec<String> = repos.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !list.is_empty() {
+            cfg.repos = list;
+        }
+    }
+
     // Allow custom backend
     if let Some(backend) = parsed.get("backend").and_then(|v| v.as_str()) {
         cfg.backend = match backend {

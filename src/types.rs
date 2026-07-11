@@ -132,14 +132,29 @@ impl Column {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub repo: String,
+    pub repos: Vec<String>,
     pub backend: Backend,
     pub columns: Vec<Column>,
+}
+
+impl Config {
+    /// Return the effective repo list: `repos` takes priority, fallback to single `repo`.
+    pub fn repo_list(&self) -> Vec<String> {
+        if !self.repos.is_empty() {
+            self.repos.clone()
+        } else if !self.repo.is_empty() {
+            vec![self.repo.clone()]
+        } else {
+            vec![]
+        }
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             repo: String::new(),
+            repos: vec![],
             backend: Backend::default(),
             columns: vec![
                 Column {

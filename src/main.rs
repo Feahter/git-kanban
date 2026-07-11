@@ -23,6 +23,10 @@ struct Cli {
     #[arg(short, long)]
     repo: Option<String>,
 
+    /// Multiple repositories (repeatable: --repos owner/a --repos owner/b)
+    #[arg(long)]
+    repos: Vec<String>,
+
     /// Use GitLab backend (glab CLI) instead of GitHub (gh CLI)
     #[arg(long)]
     gitlab: bool,
@@ -154,6 +158,15 @@ fn main() -> io::Result<()> {
     // Load config
     let mut cfg = config::load();
 
+    // Resolve repo list: CLI repos > CLI repo > config repos > config repo
+    let repos: Vec<String> = if !cli.repos.is_empty() {
+        cli.repos.clone()
+    } else if let Some(ref repo) = cli.repo {
+        vec![repo.clone()]
+    } else {
+        cfg.repo_list()
+    };
+
     // Override repo from CLI if provided
     if let Some(repo) = &cli.repo {
         cfg.repo = repo.clone();
@@ -165,11 +178,13 @@ fn main() -> io::Result<()> {
     }
 
     // Check if repo is set
-    if cfg.repo.is_empty() {
+    if repos.is_empty() && cfg.repo.is_empty() {
         eprintln!("Error: no repository configured.");
-        eprintln!("Set it via --repo flag or edit ~/.config/git-kanban/config.json");
+        eprintln!("Set it via --repo flag, --repos flags, or edit ~/.config/git-kanban/config.json");
         std::process::exit(1);
     }
+    // Use first repo for auth check and as default action target
+    let _first_repo = repos.first().cloned().unwrap_or_else(|| cfg.repo.clone());
 
     // Check CLI auth
     if let Err(e) = sync::check_cli_auth(cfg.backend) {
