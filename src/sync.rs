@@ -134,7 +134,19 @@ pub fn open_in_browser(backend: Backend, repo: &str, number: u64) {
         Backend::GitHub => format!("https://github.com/{}/issues/{}", repo, number),
         Backend::GitLab => format!("https://gitlab.com/{}/-/issues/{}", repo, number),
     };
-    Command::new("open").arg(&url).output().ok();
+    let result = if cfg!(target_os = "macos") {
+        Command::new("open").arg(&url).output()
+    } else if cfg!(target_os = "linux") {
+        Command::new("xdg-open").arg(&url).output()
+    } else if cfg!(target_os = "windows") {
+        Command::new("cmd").args(["/c", "start", &url]).output()
+    } else {
+        eprintln!("Warning: cannot open browser — unsupported OS");
+        return;
+    };
+    if let Err(e) = result {
+        eprintln!("Warning: could not open browser: {}", e);
+    }
 }
 
 pub fn edit_issue(backend: Backend, repo: &str, number: u64, title: Option<&str>, body: Option<&str>, add_labels: &[String], remove_labels: &[String]) -> Result<(), String> {

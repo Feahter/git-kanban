@@ -37,23 +37,7 @@ pub fn load() -> Config {
     let path = config_path();
 
     if !path.exists() {
-        // First run: create default config and exit
-        std::fs::create_dir_all(config_dir()).ok();
-        let default = Config::default();
-        let json = serde_json::to_string_pretty(&serde_json::json!({
-            "repo": "",
-            "backend": "github",
-            "note": "Set your repo in format 'owner/name'. Remove labels you don't use, add yours.",
-            "columns": {
-                "todo": ["todo", "status:todo"],
-                "doing": ["doing", "status:doing", "in-progress"],
-                "review": ["review", "status:review"],
-                "done": ["done", "status:done"],
-                "closed": []
-            }
-        })).unwrap();
-        std::fs::write(&path, &json).ok();
-        return default;
+        return Config::default();
     }
 
     let content = match std::fs::read_to_string(&path) {
@@ -66,7 +50,10 @@ pub fn load() -> Config {
 
     let parsed: serde_json::Value = match serde_json::from_str(&content) {
         Ok(v) => v,
-        Err(_) => return Config::default(),
+        Err(e) => {
+            eprintln!("Warning: failed to parse config.json ({}), using defaults", e);
+            return Config::default();
+        }
     };
 
     let mut cfg = Config::default();
@@ -267,19 +254,15 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::env::set_var("XDG_CONFIG_HOME", &tmp);
 
-        // First call should create default config
+        // First call should return defaults without creating a file
         let cfg = load();
         assert!(cfg.repo.is_empty(), "default repo should be empty");
         assert_eq!(cfg.backend, Backend::GitHub, "default backend should be GitHub");
         assert_eq!(cfg.columns.len(), 5, "default should have 5 columns");
 
-        // Verify config file was created
+        // Verify config file was NOT created by load()
         let path = config_path();
-        assert!(path.exists(), "config file should have been created");
-
-        // Second call should read the same config
-        let cfg2 = load();
-        assert!(cfg2.repo.is_empty());
+        assert!(!path.exists(), "config file should NOT be created by load()");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -461,21 +444,139 @@ mod tests {
     }
 
     #[test]
-    fn test_load_gitlab_backend_case_sensitive() {
+    fn test_cache_file_path_format() {
+        let path = cache_file_path("owner/name");
+        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
+        assert_eq!(filename, "issues-owner-name.json");
+    }
+
+    #[test]
+    fn test_cache_file_path_multi_slash() {
+        let path = cache_file_path("a/b/c");
+        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
+        assert_eq!(filename, "issues-a-b-c.json");
+    }
+
+    #[test]
+    fn test_read_cache_meta_roundtrip() {
         let _lock = CACHE_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join(format!("git-kanban-test-glcaps-{}", std::process::id()));
+
+        let tmp = std::env::temp_dir().join(format!("git-kanban-test-meta-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("XDG_CACHE_HOME", &tmp);
+
+        let issues = make_test_issues();
+        write_cache(&issues, "2024-06-15T10:30:00Z", "meta/repo");
+
+        let result = read_cache_meta("meta/repo");
+        assert!(result.is_some());
+        let (loaded_issues, last_sync) = result.unwrap();
+        assert_eq!(loaded_issues.len(), 2);
+        assert_eq!(last_sync, "2024-06-15T10:30:00Z");
+        assert_eq!(loaded_issues[0].number, 1);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_read_cache_meta_no_file() {
+        let _lock = CACHE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join(format!("git-kanban-test-nometa-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("XDG_CACHE_HOME", &tmp);
+
+        assert!(read_cache_meta("meta/repo").is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_write_cache_creates_dir() {
+        let _lock = CACHE_LOCK.lock().unwrap();
+
+        // Use a deeply nested temp dir that doesn't exist yet
+        let tmp = std::env::temp_dir().join(format!("git-kanban-test-mkdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        // Do NOT create git-kanban subdir — write_cache should create it
+        std::env::set_var("XDG_CACHE_HOME", &tmp);
+
+        let issues = make_test_issues();
+        let result = write_cache(&issues, "now", "create/dir");
+        assert!(result, "write_cache should create cache dir if missing");
+
+        let path = cache_file_path("create/dir");
+        assert!(path.exists(), "cache file should exist after write_cache");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_load_with_extra_config_fields() {
+        let _lock = CACHE_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("git-kanban-test-extra-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         std::env::set_var("XDG_CONFIG_HOME", &tmp);
 
         let config_dir = tmp.join("git-kanban");
         std::fs::create_dir_all(&config_dir).unwrap();
-        std::fs::write(config_dir.join("config.json"), r#"{"repo": "g/p", "backend": "GitLab"}"#).unwrap();
+        std::fs::write(
+            config_dir.join("config.json"),
+            r#"{"repo": "o/r", "note": "some note", "unknown_field": 42}"#,
+        ).unwrap();
 
         let cfg = load();
-        assert_eq!(cfg.repo, "g/p");
-        // "GitLab" != "gitlab" (case sensitive match), should default to GitHub
-        assert_eq!(cfg.backend, Backend::GitHub, "case-sensitive backend check: 'GitLab' should fall back to GitHub");
+        assert_eq!(cfg.repo, "o/r");
+        assert_eq!(cfg.backend, Backend::GitHub);
+        assert_eq!(cfg.columns.len(), 5);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_load_config_has_both_repo_and_backend() {
+        let _lock = CACHE_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("git-kanban-test-rb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", &tmp);
+
+        let config_dir = tmp.join("git-kanban");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.json"),
+            r#"{"repo": "group/project", "backend": "gitlab"}"#,
+        ).unwrap();
+
+        let cfg = load();
+        assert_eq!(cfg.repo, "group/project");
+        assert_eq!(cfg.backend, Backend::GitLab);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_config_columns_partial_override() {
+        // Only override "done" column labels, others stay default
+        let _lock = CACHE_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("git-kanban-test-part-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", &tmp);
+
+        let config_dir = tmp.join("git-kanban");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.json"),
+            r#"{"columns": {"done": ["completed", "verified"]}}"#,
+        ).unwrap();
+
+        let cfg = load();
+        assert_eq!(cfg.columns[0].labels, vec!["todo", "status:todo"], "todo should stay default");
+        assert_eq!(cfg.columns[3].id, "done");
+        assert_eq!(cfg.columns[3].labels, vec!["completed", "verified"], "done should be overridden");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

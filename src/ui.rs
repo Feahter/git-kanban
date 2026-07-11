@@ -10,7 +10,7 @@ use ratatui::{
 use std::io;
 
 use crate::sync;
-use crate::types::{Backend, Column, Issue, IssueState, Priority};
+use crate::types::{Backend, Column, IssueState, Priority};
 
 pub struct App {
     pub repo: String,
@@ -40,8 +40,7 @@ pub fn run(
     backend: Backend,
     columns: Vec<Column>,
 ) -> io::Result<()> {
-    let mut app = App::new(repo, backend, columns.clone());
-    let mut col_issues: Vec<Vec<Issue>> = columns.iter().map(|_| vec![]).collect();
+    let mut app = App::new(repo, backend, columns);
     let mut selected_row: usize = 0;
 
     match sync::fetch_issues(app.backend, &app.repo) {
@@ -56,7 +55,6 @@ pub fn run(
                     .cloned()
                     .collect();
             }
-            col_issues = app.columns.iter().map(|c| c.issues.clone()).collect();
             app.status_msg = format!("Loaded {} issues", issues.len());
         }
         Err(e) => {
@@ -77,12 +75,6 @@ pub fn run(
     app.loading = false;
 
     loop {
-        for (i, col) in app.columns.iter_mut().enumerate() {
-            if i < col_issues.len() {
-                col.issues.clone_from(&col_issues[i]);
-            }
-        }
-
         terminal.draw(|f| draw(f, &mut app, selected_row))?;
 
         if let Event::Key(key) = event::read()? {
@@ -135,7 +127,6 @@ pub fn run(
                                     .cloned()
                                     .collect();
                             }
-                            col_issues = app.columns.iter().map(|c| c.issues.clone()).collect();
                             app.status_msg = format!("Refreshed: {} issues", issues.len());
                         }
                         Err(e) => {
@@ -179,8 +170,6 @@ pub fn run(
                                             .cloned()
                                             .collect();
                                     }
-                                    col_issues =
-                                        app.columns.iter().map(|c| c.issues.clone()).collect();
                                 }
                             }
                             Err(e) => app.status_msg = format!("Create failed: {}", e),
@@ -207,11 +196,6 @@ pub fn run(
                                                     .cloned()
                                                     .collect();
                                             }
-                                            col_issues = app
-                                                .columns
-                                                .iter()
-                                                .map(|c| c.issues.clone())
-                                                .collect();
                                         }
                                     }
                                     Err(e) => app.status_msg = format!("Close failed: {}", e),
@@ -230,11 +214,6 @@ pub fn run(
                                                     .cloned()
                                                     .collect();
                                             }
-                                            col_issues = app
-                                                .columns
-                                                .iter()
-                                                .map(|c| c.issues.clone())
-                                                .collect();
                                         }
                                     }
                                     Err(e) => app.status_msg = format!("Reopen failed: {}", e),
@@ -268,8 +247,6 @@ pub fn run(
                                                     .cloned()
                                                     .collect();
                                             }
-                                            col_issues =
-                                                app.columns.iter().map(|c| c.issues.clone()).collect();
                                         }
                                     }
                                     Err(e) => app.status_msg = format!("Move failed: {}", e),
@@ -303,8 +280,6 @@ pub fn run(
                                                     .cloned()
                                                     .collect();
                                             }
-                                            col_issues =
-                                                app.columns.iter().map(|c| c.issues.clone()).collect();
                                         }
                                     }
                                     Err(e) => app.status_msg = format!("Move failed: {}", e),
@@ -351,7 +326,6 @@ pub fn run(
                                             .cloned()
                                             .collect();
                                     }
-                                    col_issues = app.columns.iter().map(|c| c.issues.clone()).collect();
                                 }
                             }
                             Err(e) => app.status_msg = format!("Assign failed: {}", e),

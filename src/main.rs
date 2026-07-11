@@ -323,7 +323,11 @@ fn main() -> io::Result<()> {
                 let labels = sync::list_labels(cfg.backend, &cfg.repo);
                 match labels {
                     Ok(labels) => {
-                        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"labels": labels})).unwrap_or_default());
+                        let json = match serde_json::to_string_pretty(&serde_json::json!({"labels": labels})) {
+                            Ok(s) => s,
+                            Err(e) => format!("{{\"error\":\"serialization failed: {}\"}}", e),
+                        };
+                        println!("{}", json);
                     }
                     Err(e) => { eprintln!("{}", e); std::process::exit(1); }
                 }
@@ -392,16 +396,18 @@ fn main() -> io::Result<()> {
                 "count": issues.iter().filter(|i| col.matches(i)).count(),
             }))
             .collect();
-        let json = serde_json::to_string_pretty(&serde_json::json!({
+        let json = match serde_json::to_string_pretty(&serde_json::json!({
             "repo": cfg.repo,
             "backend": match cfg.backend {
                 Backend::GitHub => "github",
                 Backend::GitLab => "gitlab",
             },
-            "total": cli.column.is_some().then(|| (total_count as u64)).unwrap_or(issues.len() as u64),
+            "total": if cli.column.is_some() { total_count as u64 } else { issues.len() as u64 },
             "columns": counts,
-        }))
-        .unwrap_or_default();
+        })) {
+            Ok(s) => s,
+            Err(e) => format!("{{\"error\":\"serialization failed: {}\"}}", e),
+        };
         println!("{}", json);
         return Ok(());
     }
@@ -465,7 +471,10 @@ fn main() -> io::Result<()> {
             }
         }
 
-        let json = serde_json::to_string_pretty(&v).unwrap_or_default();
+        let json = match serde_json::to_string_pretty(&v) {
+            Ok(s) => s,
+            Err(e) => format!("{{\"error\":\"serialization failed: {}\"}}", e),
+        };
         println!("{}", json);
         return Ok(());
     }
@@ -878,5 +887,159 @@ mod tests {
             }
             _ => panic!("expected Move action"),
         }
+    }
+
+    // ── Additional subcommand tests ──
+
+    #[test]
+    fn test_cli_open_subcommand() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "open", "42"]).unwrap();
+        match cli.action.unwrap() {
+            Action::Open { number } => assert_eq!(number, 42),
+            _ => panic!("expected Open action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_edit_subcommand() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--repo", "u/r",
+            "edit", "42", "--title", "New Title", "--body", "New body",
+        ]).unwrap();
+        match cli.action.unwrap() {
+            Action::Edit { number, title, body, .. } => {
+                assert_eq!(number, 42);
+                assert_eq!(title.as_deref(), Some("New Title"));
+                assert_eq!(body.as_deref(), Some("New body"));
+            }
+            _ => panic!("expected Edit action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_edit_with_labels() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--repo", "u/r",
+            "edit", "42",
+            "--add-label", "bug", "--remove-label", "feature",
+        ]).unwrap();
+        match cli.action.unwrap() {
+            Action::Edit { number, add_label, remove_label, .. } => {
+                assert_eq!(number, 42);
+                assert_eq!(add_label, vec!["bug"]);
+                assert_eq!(remove_label, vec!["feature"]);
+            }
+            _ => panic!("expected Edit action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_labels_subcommand() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "labels"]).unwrap();
+        match cli.action.unwrap() {
+            Action::Labels => {} // just parsing succeeds
+            _ => panic!("expected Labels action"),
+        }
+    }
+
+    // ── New flags ──
+
+    #[test]
+    fn test_cli_dry_run_flag() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--dry-run", "--repo", "u/r", "close", "42"]).unwrap();
+        assert!(cli.dry_run);
+    }
+
+    #[test]
+    fn test_cli_search_flag() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--search", "bug", "--repo", "u/r"]).unwrap();
+        assert_eq!(cli.search.as_deref(), Some("bug"));
+    }
+
+    #[test]
+    fn test_cli_sort_created() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--sort", "created", "--repo", "u/r"]).unwrap();
+        assert_eq!(cli.sort.as_deref(), Some("created"));
+    }
+
+    #[test]
+    fn test_cli_sort_updated() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--sort", "updated", "--repo", "u/r"]).unwrap();
+        assert_eq!(cli.sort.as_deref(), Some("updated"));
+    }
+
+    #[test]
+    fn test_cli_sort_invalid() {
+        let result = Cli::try_parse_from(&["git-kanban", "--sort", "invalid", "--repo", "u/r"]);
+        assert!(result.is_err(), "invalid sort value should fail to parse");
+    }
+
+    #[test]
+    fn test_cli_brief_flag() {
+        let cli = Cli::try_parse_from(&["git-kanban", "--brief", "--repo", "u/r"]).unwrap();
+        assert!(cli.brief);
+    }
+
+    // ── Combined flags ──
+
+    #[test]
+    fn test_cli_combined_json_brief_fields() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--json", "--brief",
+            "--fields", "number,title",
+            "--column", "doing",
+            "--repo", "u/r",
+        ]).unwrap();
+        assert!(cli.json);
+        assert!(cli.brief);
+        assert_eq!(cli.fields.as_deref(), Some("number,title"));
+        assert_eq!(cli.column.as_deref(), Some("doing"));
+    }
+
+    #[test]
+    fn test_cli_combined_summary_column_search() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--summary", "--column", "todo",
+            "--search", "urgent", "--sort", "updated",
+            "--repo", "u/r",
+        ]).unwrap();
+        assert!(cli.summary);
+        assert_eq!(cli.column.as_deref(), Some("todo"));
+        assert_eq!(cli.search.as_deref(), Some("urgent"));
+        assert_eq!(cli.sort.as_deref(), Some("updated"));
+    }
+
+    #[test]
+    fn test_cli_refresh_dry_run() {
+        let cli = Cli::try_parse_from(&[
+            "git-kanban", "--refresh", "--dry-run", "--repo", "u/r",
+        ]).unwrap();
+        assert!(cli.refresh);
+        assert!(cli.dry_run);
+    }
+
+    // ── Error cases ──
+
+    #[test]
+    fn test_cli_close_requires_number() {
+        // close subcommand requires a positional number
+        let result = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "close"]);
+        assert!(result.is_err(), "close requires a number argument");
+    }
+
+    #[test]
+    fn test_cli_reopen_invalid_number_type() {
+        // number is a String, so any string parses fine; validation happens at runtime
+        let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "reopen", "abc"]).unwrap();
+        match cli.action.unwrap() {
+            Action::Reopen { number } => assert_eq!(number, "abc"),
+            _ => panic!("expected Reopen action"),
+        }
+    }
+
+    #[test]
+    fn test_cli_unknown_subcommand() {
+        let result = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "unknown-cmd"]);
+        assert!(result.is_err(), "unknown subcommand should fail to parse");
     }
 }

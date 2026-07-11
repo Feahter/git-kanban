@@ -14,6 +14,21 @@ fn binary_path() -> String {
     format!("{}/target/debug/git-kanban", cargo_manifest)
 }
 
+/// Run the binary with a clean (empty) config environment.
+/// Sets XDG_CONFIG_HOME to a temp dir so the binary sees NO config file.
+fn run_with_empty_config(args: &[&str]) -> std::process::Output {
+    let tmp = std::env::temp_dir().join(format!("git-kanban-test-empty-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).ok();
+    let output = std::process::Command::new(binary_path())
+        .args(args)
+        .env("XDG_CONFIG_HOME", &tmp)
+        .output()
+        .expect("failed to execute binary");
+    let _ = std::fs::remove_dir_all(&tmp);
+    output
+}
+
 // ── Synthetic tests (no auth needed) ──
 
 #[test]
@@ -31,9 +46,7 @@ fn test_help_exits_ok() {
 
 #[test]
 fn test_no_repo_exits_with_error() {
-    let output = Command::new(binary_path())
-        .output()
-        .expect("failed to execute binary");
+    let output = run_with_empty_config(&[]);
     assert!(!output.status.success(), "should exit with error");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("no repository"), "stderr: {stderr}");
@@ -41,10 +54,7 @@ fn test_no_repo_exits_with_error() {
 
 #[test]
 fn test_json_without_repo_exits_with_error() {
-    let output = Command::new(binary_path())
-        .arg("--json")
-        .output()
-        .expect("failed to execute binary");
+    let output = run_with_empty_config(&["--json"]);
     assert!(!output.status.success(), "should exit with error");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("no repository"), "stderr: {stderr}");
@@ -52,10 +62,7 @@ fn test_json_without_repo_exits_with_error() {
 
 #[test]
 fn test_refresh_without_repo_exits_with_error() {
-    let output = Command::new(binary_path())
-        .arg("--refresh")
-        .output()
-        .expect("failed to execute binary");
+    let output = run_with_empty_config(&["--refresh"]);
     assert!(!output.status.success(), "should exit with error");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("no repository"), "stderr: {stderr}");
@@ -63,10 +70,7 @@ fn test_refresh_without_repo_exits_with_error() {
 
 #[test]
 fn test_summary_without_repo_exits_with_error() {
-    let output = Command::new(binary_path())
-        .arg("--summary")
-        .output()
-        .expect("failed to execute binary");
+    let output = run_with_empty_config(&["--summary"]);
     assert!(!output.status.success(), "should exit with error");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("no repository"), "stderr: {stderr}");

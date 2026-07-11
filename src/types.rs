@@ -562,6 +562,67 @@ mod tests {
         assert!(cfg.columns[4].labels.is_empty());
     }
 
+    #[test]
+    fn test_config_default_column_titles() {
+        let cfg = Config::default();
+        assert_eq!(cfg.columns[0].title, "📋 Todo");
+        assert_eq!(cfg.columns[1].title, "🔧 Doing");
+        assert_eq!(cfg.columns[2].title, "👀 Review");
+        assert_eq!(cfg.columns[3].title, "✅ Done");
+        assert_eq!(cfg.columns[4].title, "❌ Closed");
+    }
+
+    #[test]
+    fn test_config_default_column_lists() {
+        let cfg = Config::default();
+        assert_eq!(cfg.columns[0].labels, vec!["todo", "status:todo"]);
+        assert_eq!(cfg.columns[1].labels, vec!["doing", "status:doing", "in-progress"]);
+        assert_eq!(cfg.columns[2].labels, vec!["review", "status:review"]);
+        assert_eq!(cfg.columns[3].labels, vec!["done", "status:done"]);
+        assert!(cfg.columns[4].labels.is_empty());
+    }
+
+    // ── More Column::matches() edge cases ──
+
+    #[test]
+    fn test_column_matches_issue_labels_uppercase_column_labels_lowercase() {
+        // Column labels are lowercase, issue has UPPERCASE labels
+        let col = Column {
+            id: "todo".into(), title: "Todo".into(),
+            labels: vec!["todo".into()], show_closed: false, issues: vec![],
+        };
+        assert!(col.matches(&make_open_issue(vec!["TODO".into()])));
+    }
+
+    #[test]
+    fn test_column_matches_issue_has_multiple_labels_matches_last() {
+        let col = Column {
+            id: "doing".into(), title: "Doing".into(),
+            labels: vec!["doing".into(), "in-progress".into(), "wip".into()],
+            show_closed: false, issues: vec![],
+        };
+        assert!(col.matches(&make_open_issue(vec!["bug".into(), "wip".into()])));
+    }
+
+    #[test]
+    fn test_column_matches_issue_no_labels_open_column_has_labels() {
+        let col = Column {
+            id: "todo".into(), title: "Todo".into(),
+            labels: vec!["todo".into()], show_closed: false, issues: vec![],
+        };
+        assert!(!col.matches(&make_open_issue(vec![])));
+    }
+
+    #[test]
+    fn test_column_matches_issue_no_labels_open_column_empty_labels() {
+        // Open issue with no labels, column with empty labels → false
+        let col = Column {
+            id: "custom".into(), title: "Custom".into(),
+            labels: vec![], show_closed: false, issues: vec![],
+        };
+        assert!(!col.matches(&make_open_issue(vec![])));
+    }
+
     // ── Backend serde string tests ──
 
     #[test]
