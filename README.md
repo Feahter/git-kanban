@@ -1,86 +1,62 @@
 # git-kanban
 
-> **858KB single binary. <10ms startup. Zero runtime deps. Agent-friendly JSON mode.**
-> Terminal kanban board for Git platforms (GitHub / GitLab).
-
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
-
-```bash
-git-kanban --repo owner/name           # TUI kanban board
-git-kanban --json --repo R --cached    # Agent: read issues in <10ms
-git-kanban create "fix: ..." --label bug  # Agent: create issue
-```
+> Terminal kanban board for GitHub Issues / GitLab Issues.  
+> 858KB single binary. 4 crates. Zero runtime deps. Every TUI action has a CLI subcommand.
 
 [中文版](./README.zh.md)
 
 ---
 
-## Quick Start
+## Quick start
 
 ```bash
-# Prerequisites
-gh auth login     # GitHub
-glab auth login   # GitLab
+# 1. Prerequisites
+gh auth login       # GitHub
 
-# Install
+# 2. Install
 cargo install --git https://github.com/Feahter/git-kanban
 
-# Run
-git-kanban --repo owner/name
+# 3. Verify
+git-kanban --version                 # → "git-kanban 0.1.0", exit 0
+git-kanban --help                    # → subcommands + flags, exit 0
+
+# 4. Test it
+git-kanban --json --repo owner/name  # → JSON issues, exit 0
 ```
 
 ---
 
-## Agent Usage
+## Agent usage
 
-Every TUI operation has a corresponding CLI subcommand — designed for Claude Code, Codex, Hermes.
-
-```bash
-# Read — structured JSON output
-git-kanban --json --repo R                           # All issues
-git-kanban --json --repo R --cached                   # From cache (no network, <10ms)
-git-kanban --json --repo R --column doing             # Filter by column
-git-kanban --json --repo R --fields number,title      # Select fields (less tokens)
-git-kanban --summary --repo R                         # Per-column counts
-git-kanban --refresh --quiet --repo R                 # Refresh cache silently
-
-# Write — agent-safe subcommands
-git-kanban create "title" --body "desc" --label bug   # → outputs issue number
-git-kanban close <num>
-git-kanban reopen <num>
-git-kanban comment <num> --body "msg"
-git-kanban assign <num>                                # Assign self
-git-kanban assign <num> --user someone                 # Assign someone else
-git-kanban move <num> --add-label doing --remove-label todo
-
-# Preview without side effects
-git-kanban --dry-run move <num> --add-label doing --remove-label todo
-```
-
-### Agent workflow example
+### Read issues (`--json`)
 
 ```bash
-issues=$(git-kanban --json --repo R)
-git-kanban assign 42 \
-  && git-kanban move 42 --add-label doing --remove-label todo \
-  && git-kanban comment 42 --body "Taking a look"
+git-kanban --json --repo owner/name                           # All issues
+git-kanban --json --repo owner/name --column doing            # Filter by column
+git-kanban --json --repo owner/name --fields number,title     # Select fields (less tokens)
+git-kanban --json --repo owner/name --sort created            # Sort: created|updated
+git-kanban --json --repo owner/name --search "keyword"        # Search title/body
+git-kanban --json --repo owner/name --brief                   # Omit body from output
+git-kanban --json --repo owner/name --cached                  # Cache only (no network, <10ms)
+git-kanban --summary --repo owner/name                        # Per-column counts only
 ```
 
-### JSON output format
+**→ Output:** JSON object, exit 0.
 
 ```json
 {
   "repo": "owner/name",
   "backend": "github",
-  "count": 5,
+  "from_cache": false,
+  "cached_at": "",
+  "total": 3,
   "issues": [
     {
       "number": 42,
       "title": "Fix login bug",
       "body": "Users cannot login with SSO...",
       "state": "Open",
-      "labels": ["bug", "auth"],
+      "labels": ["bug", "p0"],
       "assignees": ["fez"],
       "priority": "P0",
       "created_at": "2026-07-01T10:00:00Z",
@@ -90,28 +66,120 @@ git-kanban assign 42 \
 }
 ```
 
-### Move semantics
+### Write operations
 
-`move` adds/removes labels — it doesn't physically drag cards. Always specify both source and target labels:
+Write operations output JSON + exit 0 on success, exit 1 on failure (error on stderr).
+
+| Action | Command | Success output |
+|--------|---------|---------------|
+| Create | `git-kanban create "title" --label bug --body "desc"` | `{"action":"create","number":43,"ok":true}` |
+| Close | `git-kanban close 42` | `{"action":"close","numbers":[42],"ok":true,"failed":[]}` |
+| Reopen | `git-kanban reopen 42` | `{"action":"reopen","numbers":[42],"ok":true,"failed":[]}` |
+| Comment | `git-kanban comment 42 --body "message"` | `{"action":"comment","number":42,"ok":true}` |
+| Assign self | `git-kanban assign 42` | `{"action":"assign","number":42,"ok":true}` |
+| Assign user | `git-kanban assign 42 --user someone` | `{"action":"assign","number":42,"ok":true}` |
+| Move right | `git-kanban move 42 --add-label doing --remove-label todo` | `{"action":"move","number":42,"ok":true}` |
+| Edit | `git-kanban edit 42 --title "new title" --body "new body"` | `{"action":"edit","number":42,"ok":true}` |
+| Open browser | `git-kanban open 42` | `{"action":"open","number":42,"ok":true}` |
+| List labels | `git-kanban labels` | `{"labels":["bug","feature",...]}` |
+
+**Close/reopen accept comma-separated numbers:** `git-kanban close 12,15,18`
+
+### Pipe example
 
 ```bash
-# ✅ Correct
-git-kanban move 42 --remove-label todo --add-label doing
+issues=$(git-kanban --json --repo owner/name)
+git-kanban assign 42 \
+  && git-kanban move 42 --add-label doing --remove-label todo \
+  && git-kanban comment 42 --body "Taking a look"
+```
 
-# ❌ Wrong (issue stays in both columns)
-git-kanban move 42 --add-label doing
+### Preview without side effects
+
+```bash
+git-kanban --dry-run move 42 --add-label doing --remove-label todo
+```
+
+### Cache management
+
+```bash
+git-kanban --refresh --repo owner/name     # Force re-fetch
+git-kanban --refresh --quiet --repo ...    # Silent refresh
+git-kanban --json --cached --repo ...      # Read cache, skip network
 ```
 
 ---
 
-## Keybindings
+## Config
+
+`~/.config/git-kanban/config.json` — set default repo and custom column labels:
+
+```json
+{
+  "repo": "owner/name",
+  "backend": "github",
+  "columns": {
+    "todo":    ["todo", "status:todo"],
+    "doing":   ["doing", "status:doing", "in-progress"],
+    "review":  ["review", "status:review"],
+    "done":    ["done", "status:done"],
+    "closed":  []
+  }
+}
+```
+
+Backend: `"github"` or `"gitlab"`. Each column maps labels → an issue with any matching label appears in that column. The `closed` column with empty labels shows all closed issues.
+
+---
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Error (auth, args, API failure) |
+
+---
+
+## All flags & subcommands
+
+| Arg | Description |
+|-----|-------------|
+| `--repo <R>` | Repository `owner/name` (required unless in config) |
+| `--json` | Output issues as JSON (read mode) |
+| `--summary` | Per-column counts |
+| `--column <C>` | Filter by column id |
+| `--fields <F>` | Comma-separated fields: `number,title,state,labels` |
+| `--sort <S>` | Sort: `created` or `updated` |
+| `--search <K>` | Keyword filter (title/body, case-insensitive) |
+| `--brief` | Omit body from JSON output |
+| `--cached` | Cache only (no API call) |
+| `--refresh` | Force cache refresh |
+| `--gitlab` | Use GitLab backend |
+| `--dry-run` | Preview write, no side effects |
+| `--quiet` | Suppress non-essential output |
+| `create` | Create issue |
+| `close <N>` | Close issue(s) |
+| `reopen <N>` | Reopen issue(s) |
+| `comment <N>` | Add comment |
+| `assign <N>` | Assign issue |
+| `move <N>` | Move between columns (add/remove labels) |
+| `edit <N>` | Edit title/body/labels |
+| `open <N>` | Open in browser |
+| `labels` | List all repo labels |
+
+---
+
+## TUI (keybindings)
+
+Run `git-kanban --repo owner/name` for the terminal UI.
 
 | Key | Action |
 |-----|--------|
 | `h`/`l` or ←/→ | Navigate columns |
 | `Tab`/`BackTab` | Navigate columns |
 | `j`/`k` or ↑/↓ | Scroll cards |
-| `Enter` | Open issue in browser |
+| `Enter` | Open in browser |
 | `n` | New issue |
 | `x` | Close / reopen |
 | `m` / `M` | Move right / left |
@@ -126,27 +194,56 @@ git-kanban move 42 --add-label doing
 ## GitLab
 
 ```bash
-git-kanban --gitlab --repo owner/name
+git-kanban --gitlab --repo owner/project
 ```
 
-Or set `"backend": "gitlab"` in `~/.config/git-kanban/config.json`.
+Or set `"backend": "gitlab"` in config.
 
 ---
 
-## Config
+## JSON schema
 
-`~/.config/git-kanban/config.json`:
+| Field | Type | Description |
+|-------|------|-------------|
+| `repo` | string | `"owner/name"` |
+| `backend` | string | `"github"` or `"gitlab"` |
+| `from_cache` | bool | Served from local cache |
+| `cached_at` | string | ISO 8601 UTC of cache timestamp |
+| `total` | integer | Number of issues in response |
+| `issues[]` | array | Issue objects |
+| `issues[].number` | integer | Issue number |
+| `issues[].title` | string | Title |
+| `issues[].body` | string | Body (empty string if none) |
+| `issues[].state` | string | `"Open"` or `"Closed"` |
+| `issues[].labels` | array | Label strings |
+| `issues[].assignees` | array | User login strings |
+| `issues[].priority` | string\|null | `"P0"`–`"P3"` or null |
+| `issues[].created_at` | string | ISO 8601 UTC |
+| `issues[].updated_at` | string | ISO 8601 UTC |
+
+### Summary output schema
 
 ```json
 {
   "repo": "owner/name",
   "backend": "github",
-  "columns": {
-    "todo": ["backlog", "triage"],
-    "doing": ["wip"],
-    "review": ["needs-review"]
-  }
+  "total": 3,
+  "columns": [
+    {"id": "todo", "title": "📋 Todo", "count": 1},
+    {"id": "doing", "title": "🔧 Doing", "count": 2}
+  ]
 }
+```
+
+---
+
+## Move semantics
+
+`move` adds/removes **labels**—always specify both source and target:
+
+```bash
+git-kanban move 42 --remove-label todo --add-label doing   # ✅
+git-kanban move 42 --add-label doing                        # ❌ stays in both columns
 ```
 
 ---
@@ -154,44 +251,22 @@ Or set `"backend": "gitlab"` in `~/.config/git-kanban/config.json`.
 ## Design
 
 ```
-                ┌──────────────────────┐
-                │   git-kanban TUI     │
-                │  (ratatui + serde)   │
-                ├──────────┬───────────┤
-                │ JSON     │ CLI       │
-                │ cache    │ wrapper   │
-                │(read)    │(write)    │
-                └────┬─────┴─────┬─────┘
-                     │           │
-              ~/.cache/    gh/glab issue
-           git-kanban/    list/create/
-           issues.json    close/edit/comment
-```
+4 crates: ratatui, crossterm, serde, clap
+No tokio  ❌    No reqwest  ❌    No SQLite  ❌    No chrono  ❌
 
-- **Read path:** JSON cache → render → background sync
-- **Write path:** CLI subcommand → refresh cache
-- **Auth:** Zero config — inherits `~/.config/gh/` or `~/.config/glab/` tokens
+Read:  JSON cache → render → background sync
+Write: CLI subcommand → refresh cache
+Auth:  Inherits ~/.config/gh/ or ~/.config/glab/ tokens
+```
 
 | Metric | Value |
 |--------|-------|
-| Binary size | 858 KB (single file) |
-| Cold start | <10ms |
+| Binary | 858 KB |
+| Start | <10ms |
 | Dependencies | 4 crates |
-| Async runtime | ❌ tokio |
-| Embedded DB | ❌ SQLite |
-| HTTP client | ❌ octocrab/reqwest |
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
-
----
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) — small scope, high polish, no unnecessary deps.
-
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Security Policy](SECURITY.md)
+MIT

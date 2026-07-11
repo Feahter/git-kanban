@@ -1,13 +1,7 @@
 # git-kanban
 
-> **858KB 单文件二进制，毫秒级启动，零运行时依赖，支持 Agent 使用的 JSON 模式。**
-> 终端看板工具，支持 GitHub 和 GitLab Issues。
-
-```bash
-git-kanban --repo owner/name   # TUI 看板模式
-git-kanban --json --repo R     # Agent JSON 模式
-git-kanban create "bug: ..." --body "..." --label bug  # 创建 Issue
-```
+> 终端看板工具，支持 GitHub/GitLab Issues。
+> 858KB 单文件二进制，4 个依赖 crate。每个 TUI 操作都有对应的 CLI 子命令（Agent 友好）。
 
 [English](./README.md)
 
@@ -16,69 +10,53 @@ git-kanban create "bug: ..." --body "..." --label bug  # 创建 Issue
 ## 快速开始
 
 ```bash
-# 前置条件 - 安装 CLI 工具
-gh auth login     # GitHub
-glab auth login   # GitLab
+# 1. 前置条件
+gh auth login       # GitHub
 
-# 安装
+# 2. 安装
 cargo install --git https://github.com/Feahter/git-kanban
 
-# 运行
-git-kanban --repo owner/name
+# 3. 验证
+git-kanban --version                 # → "git-kanban 0.1.0", exit 0
+git-kanban --help                    # → 子命令 + 参数列表, exit 0
+
+# 4. 测试
+git-kanban --json --repo owner/name  # → JSON issues, exit 0
 ```
 
 ---
 
-## Agent 接口
+## Agent 用法
 
-专为 AI Agent（Claude Code、Codex、Hermes）设计，TUI 所有操作都有对应的 CLI 子命令。
-
-```bash
-# 读取 — 结构化 JSON 输出
-git-kanban --json --repo R              # 全部 issues（含 body 描述）
-git-kanban --json --repo R --cached      # 从缓存读取（无网络，<10ms）
-git-kanban --json --repo R --column doing # 按看板列过滤
-git-kanban --json --repo R --fields number,title  # 选择字段（节省 token）
-git-kanban --summary --repo R            # 各列计数统计
-git-kanban --refresh --quiet --repo R    # 静默刷新缓存
-
-# 写入 — Agent 安全的子命令（无需交互）
-git-kanban create "标题" --body "描述" --label bug   # → 输出 issue 编号
-git-kanban close <编号>
-git-kanban reopen <编号>
-git-kanban comment <编号> --body "评论内容"
-git-kanban assign <编号>                                 # 指派给自己
-git-kanban assign <编号> --user someone                  # 指派给他人
-git-kanban move <编号> --add-label doing --remove-label todo
-
-# 预览 — 无副作用
-git-kanban --dry-run move <编号> --add-label doing --remove-label todo
-```
-
-### Agent 工作流示例
+### 读取（`--json`）
 
 ```bash
-# 1. 列出 open issues → 2. 指派给自己 → 3. 移到 doing → 4. 评论
-issues=$(git-kanban --json --repo R)
-git-kanban assign 42 \
-  && git-kanban move 42 --add-label doing --remove-label todo \
-  && git-kanban comment 42 --body "开始处理"
+git-kanban --json --repo owner/name                        # 全部 issues
+git-kanban --json --repo owner/name --column doing          # 按列过滤
+git-kanban --json --repo owner/name --fields number,title   # 选字段（省 token）
+git-kanban --json --repo owner/name --sort created          # 排序: created|updated
+git-kanban --json --repo owner/name --search "关键词"        # 搜索标题/正文
+git-kanban --json --repo owner/name --brief                 # 省略 body
+git-kanban --json --repo owner/name --cached                # 缓存读取（无网络，<10ms）
+git-kanban --summary --repo owner/name                      # 各列计数
 ```
 
-### JSON 输出格式
+**→ 输出:** JSON 对象, exit 0。
 
 ```json
 {
   "repo": "owner/name",
   "backend": "github",
-  "count": 5,
+  "from_cache": false,
+  "cached_at": "",
+  "total": 3,
   "issues": [
     {
       "number": 42,
       "title": "修复登录 bug",
       "body": "用户无法通过 SSO 登录...",
       "state": "Open",
-      "labels": ["bug", "auth"],
+      "labels": ["bug", "p0"],
       "assignees": ["fez"],
       "priority": "P0",
       "created_at": "2026-07-01T10:00:00Z",
@@ -88,21 +66,113 @@ git-kanban assign 42 \
 }
 ```
 
-### move 语义说明
+### 写入操作
 
-`move` 是标签增删操作，不是物理拖动。Agent 调用时需同时指定 **移除源列标签** 和 **添加目标列标签**：
+写入操作输出 JSON。exit 0 = 成功, exit 1 = 失败（错误信息在 stderr）。
+
+| 操作 | 命令 | 成功输出 |
+|------|------|---------|
+| 创建 | `git-kanban create "标题" --label bug --body "描述"` | `{"action":"create","number":43,"ok":true}` |
+| 关闭 | `git-kanban close 42` | `{"action":"close","numbers":[42],"ok":true,"failed":[]}` |
+| 重开 | `git-kanban reopen 42` | `{"action":"reopen","numbers":[42],"ok":true,"failed":[]}` |
+| 评论 | `git-kanban comment 42 --body "消息"` | `{"action":"comment","number":42,"ok":true}` |
+| 指派自己 | `git-kanban assign 42` | `{"action":"assign","number":42,"ok":true}` |
+| 指派他人 | `git-kanban assign 42 --user someone` | `{"action":"assign","number":42,"ok":true}` |
+| 右移 | `git-kanban move 42 --add-label doing --remove-label todo` | `{"action":"move","number":42,"ok":true}` |
+| 编辑 | `git-kanban edit 42 --title "新标题" --body "新内容"` | `{"action":"edit","number":42,"ok":true}` |
+| 浏览器打开 | `git-kanban open 42` | `{"action":"open","number":42,"ok":true}` |
+| 列出标签 | `git-kanban labels` | `{"labels":["bug","feature",...]}` |
+
+**关闭/重开支持逗号分隔编号：** `git-kanban close 12,15,18`
+
+### 管道示例
 
 ```bash
-# ✅ 正确用法
-git-kanban move 42 --remove-label todo --add-label doing
+issues=$(git-kanban --json --repo owner/name)
+git-kanban assign 42 \
+  && git-kanban move 42 --add-label doing --remove-label todo \
+  && git-kanban comment 42 --body "开始处理"
+```
 
-# ❌ 错误用法（issue 会同时存在两列）
-git-kanban move 42 --add-label doing
+### 预览（无副作用）
+
+```bash
+git-kanban --dry-run move 42 --add-label doing --remove-label todo
+```
+
+### 缓存管理
+
+```bash
+git-kanban --refresh --repo owner/name     # 强制重新拉取
+git-kanban --refresh --quiet --repo ...    # 静默刷新
+git-kanban --json --cached --repo ...      # 仅读缓存，不走网络
 ```
 
 ---
 
-## 按键
+## 配置
+
+`~/.config/git-kanban/config.json` — 设置默认 repo 和自定义列映射：
+
+```json
+{
+  "repo": "owner/name",
+  "backend": "github",
+  "columns": {
+    "todo":    ["todo", "status:todo"],
+    "doing":   ["doing", "status:doing", "in-progress"],
+    "review":  ["review", "status:review"],
+    "done":    ["done", "status:done"],
+    "closed":  []
+  }
+}
+```
+
+后端：`"github"` 或 `"gitlab"`。每列通过标签匹配 issue——issue 有任意一个匹配标签即出现在该列。`closed` 列的标签为空数组，显示所有已关闭的 issue。
+
+---
+
+## 退出码
+
+| 码 | 含义 |
+|----|------|
+| 0 | 成功 |
+| 1 | 错误（认证/参数/API 失败） |
+
+---
+
+## 全部参数 & 子命令
+
+| 参数 | 说明 |
+|------|------|
+| `--repo <R>` | 仓库 `owner/name`（配置文件中已设时可省略） |
+| `--json` | 以 JSON 输出 issue 列表（读取模式） |
+| `--summary` | 各列计数统计 |
+| `--column <C>` | 按列 ID 过滤 |
+| `--fields <F>` | 逗号分隔字段：`number,title,state,labels` |
+| `--sort <S>` | 排序：`created` 或 `updated` |
+| `--search <K>` | 关键词过滤（标题/正文，大小写不敏感） |
+| `--brief` | JSON 输出中省略 body |
+| `--cached` | 仅读缓存，不走 API |
+| `--refresh` | 强制刷新缓存 |
+| `--gitlab` | 使用 GitLab 后端 |
+| `--dry-run` | 预览写入操作，无副作用 |
+| `--quiet` | 压制非必要输出 |
+| `create` | 创建 issue |
+| `close <N>` | 关闭 issue |
+| `reopen <N>` | 重开 issue |
+| `comment <N>` | 添加评论 |
+| `assign <N>` | 指派 issue |
+| `move <N>` | 移动列（增删标签） |
+| `edit <N>` | 编辑标题/正文/标签 |
+| `open <N>` | 浏览器打开 |
+| `labels` | 列出仓库所有标签 |
+
+---
+
+## TUI 快捷键
+
+运行 `git-kanban --repo owner/name` 启动终端界面。
 
 | 按键 | 动作 |
 |------|------|
@@ -110,9 +180,9 @@ git-kanban move 42 --add-label doing
 | `Tab`/`BackTab` | 切换列 |
 | `j`/`k` 或 ↑/↓ | 上下滚动卡片 |
 | `Enter` | 浏览器打开 |
-| `n` | 新建 Issue |
-| `x` | 关闭或重开 |
-| `m` / `M` | 右移或左移 |
+| `n` | 新建 issue |
+| `x` | 关闭/重开 |
+| `m` / `M` | 右移/左移 |
 | `c` | 添加评论 |
 | `a` | 指派给自己 |
 | `r` | 刷新 |
@@ -124,27 +194,56 @@ git-kanban move 42 --add-label doing
 ## GitLab
 
 ```bash
-git-kanban --gitlab --repo owner/name
+git-kanban --gitlab --repo owner/project
 ```
 
-或在 `~/.config/git-kanban/config.json` 中设置 `"backend": "gitlab"`。
+或在配置文件中设置 `"backend": "gitlab"`。
 
 ---
 
-## 配置
+## JSON schema
 
-`~/.config/git-kanban/config.json`:
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `repo` | string | `"owner/name"` |
+| `backend` | string | `"github"` 或 `"gitlab"` |
+| `from_cache` | bool | 是否来自本地缓存 |
+| `cached_at` | string | 缓存的 ISO 8601 UTC 时间戳 |
+| `total` | integer | 本次返回的 issue 数 |
+| `issues[]` | array | Issue 对象数组 |
+| `issues[].number` | integer | Issue 编号 |
+| `issues[].title` | string | 标题 |
+| `issues[].body` | string | 正文（空字符串时省略） |
+| `issues[].state` | string | `"Open"` 或 `"Closed"` |
+| `issues[].labels` | array | 标签字符串 |
+| `issues[].assignees` | array | 指派用户登录名 |
+| `issues[].priority` | string\|null | `"P0"`–`"P3"` 或 null |
+| `issues[].created_at` | string | ISO 8601 UTC |
+| `issues[].updated_at` | string | ISO 8601 UTC |
+
+### 统计输出格式
 
 ```json
 {
   "repo": "owner/name",
   "backend": "github",
-  "columns": {
-    "todo": ["backlog", "triage"],
-    "doing": ["wip"],
-    "review": ["needs-review"]
-  }
+  "total": 3,
+  "columns": [
+    {"id": "todo", "title": "📋 Todo", "count": 1},
+    {"id": "doing", "title": "🔧 Doing", "count": 2}
+  ]
 }
+```
+
+---
+
+## Move 语义
+
+`move` 是标签操作，不是物理拖动。必须同时指定源列标签和目标列标签：
+
+```bash
+git-kanban move 42 --remove-label todo --add-label doing   # ✅
+git-kanban move 42 --add-label doing                        # ❌ issue 会在两列同时出现
 ```
 
 ---
@@ -152,32 +251,19 @@ git-kanban --gitlab --repo owner/name
 ## 架构
 
 ```
-                ┌──────────────────────┐
-                │   git-kanban TUI     │
-                │  (ratatui + serde)   │
-                ├──────────┬───────────┤
-                │ JSON     │ CLI       │
-                │ cache    │ wrapper   │
-                │(read)    │(write)    │
-                └────┬─────┴─────┬─────┘
-                     │           │
-              ~/.cache/    gh/glab issue
-           git-kanban/    list/create/
-           issues.json    close/edit/comment
-```
+4 个 crate: ratatui, crossterm, serde, clap
+无 tokio  ❌    无 reqwest  ❌    无 SQLite  ❌    无 chrono  ❌
 
-- **读取路径：** JSON 缓存 → 渲染 → 后台同步
-- **写入路径：** CLI 子命令 → 刷新缓存
-- **认证：** 零配置 — 继承 `~/.config/gh/` 或 `~/.config/glab/` 的 token
+读取： JSON 缓存 → 渲染 → 后台同步
+写入： CLI 子命令 → 刷新缓存
+认证： 继承 ~/.config/gh/ 或 ~/.config/glab/ 的 token
+```
 
 | 指标 | 值 |
 |------|-----|
-| 体积 | 858 KB（单文件） |
+| 二进制体积 | 858 KB |
 | 冷启动 | <10ms |
-| 依赖 | 4 个 crate |
-| Async runtime | ❌ tokio |
-| 嵌入式数据库 | ❌ SQLite |
-| HTTP 客户端 | ❌ octocrab/reqwest |
+| 依赖 | 4 crate |
 
 ---
 
