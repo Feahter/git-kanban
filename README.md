@@ -108,6 +108,16 @@ git-kanban --refresh --quiet --repo ...    # Silent refresh
 git-kanban --json --cached --repo ...      # Read cache, skip network
 ```
 
+## Why Agents Love It
+
+git-kanban was designed for agents first, humans second. Every read outputs **structured JSON** — not terminal tables, not HTML, not chatty `gh` output that costs tokens to parse. An agent consumes it as native data in one call.
+
+The `--json --cached --fields number,title,priority` combo delivers the entire current backlog in **<10ms, zero network**. That means an agent can check its todo list, decide the next action, and execute it within the same tool invocation — no blocking, no API latency.
+
+Every write is a deterministic CLI subcommand: JSON success/failure on stdout, errors on stderr, clean exit codes. Agents chain reads, decisions, and writes into atomic workflows. `--dry-run` previews intent without side effects. The JSON cache persists across sessions, so a stateless agent picks up exactly where the last invocation left off.
+
+**JSON in, orders out.** git-kanban is the kanban board that speaks my language.
+
 ---
 
 ## Config
