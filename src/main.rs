@@ -115,10 +115,10 @@ enum Action {
         #[arg(long)]
         user: Option<String>,
     },
-    /// Move an issue between columns (adds and/or removes labels)
+    /// Move an issue between columns (supports comma-separated: "12,15,18")
     Move {
-        /// Issue number
-        number: u64,
+        /// Issue number(s), comma-separated
+        number: String,
         /// Labels to add (repeatable: --add-label doing --add-label wip)
         #[arg(long)]
         add_label: Vec<String>,
@@ -209,6 +209,7 @@ fn main() -> io::Result<()> {
                                 eprintln!("Warning: failed to write cache");
                             }
                         }
+                        config::append_event("create", &num.to_string(), &title);
                         println!("{}", serde_json::json!({"action":"create","number":num,"ok":true}));
                     }
                     Err(e) => { eprintln!("{}", e); std::process::exit(1); }
@@ -236,6 +237,9 @@ fn main() -> io::Result<()> {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
+                for n in &nums {
+                    config::append_event("close", &n.to_string(), "");
+                }
                 println!("{}", serde_json::json!({"action":"close","numbers":nums,"ok":failed.is_empty(),"failed":failed}));
                 if !failed.is_empty() { std::process::exit(1); }
             }
@@ -261,6 +265,9 @@ fn main() -> io::Result<()> {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
+                for n in &nums {
+                    config::append_event("reopen", &n.to_string(), "");
+                }
                 println!("{}", serde_json::json!({"action":"reopen","numbers":nums,"ok":failed.is_empty(),"failed":failed}));
                 if !failed.is_empty() { std::process::exit(1); }
             }
@@ -278,6 +285,7 @@ fn main() -> io::Result<()> {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
+                config::append_event("comment", &number.to_string(), &body);
                 println!("{}", serde_json::json!({"action":"comment","number":number,"ok":true}));
             }
             Action::Assign { number, user } => {
@@ -297,23 +305,38 @@ fn main() -> io::Result<()> {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
+                config::append_event("assign", &number.to_string(), &user.unwrap_or_else(|| "self".into()));
                 println!("{}", serde_json::json!({"action":"assign","number":number,"ok":true}));
             }
             Action::Move { number, add_label, remove_label } => {
+                let nums: Vec<u64> = number.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                if nums.is_empty() {
+                    eprintln!("Error: invalid issue number(s): '{}'", number);
+                    std::process::exit(1);
+                }
                 if cli.dry_run {
-                    println!("{}", serde_json::json!({"action":"move","number":number,"add_label":add_label,"remove_label":remove_label,"dry_run":true}));
+                    println!("{}", serde_json::json!({"action":"move","numbers":nums,"add_label":add_label,"remove_label":remove_label,"dry_run":true}));
                     return Ok(());
                 }
-                if let Err(e) = sync::move_issue(cfg.backend, &cfg.repo, number, &remove_label, &add_label) {
-                    eprintln!("{}", e); std::process::exit(1);
+                let mut failed = Vec::new();
+                for n in &nums {
+                    if let Err(e) = sync::move_issue(cfg.backend, &cfg.repo, *n, &remove_label, &add_label) {
+                        eprintln!("Error moving #{}: {}", n, e);
+                        failed.push(*n);
+                    } else {
+                        let mut detail = String::new();
+                        if !add_label.is_empty() { detail.push_str(&format!("+{}", add_label.join(","))); }
+                        if !remove_label.is_empty() { detail.push_str(&format!("-{}", remove_label.join(","))); }
+                        config::append_event("move", &n.to_string(), &detail);
+                    }
                 }
-                // Refresh cache after write
                 if let Ok(issues) = sync::fetch_issues(cfg.backend, &cfg.repo) {
                     if !config::write_cache(&issues, &chrono_now(), &cfg.repo) {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
-                println!("{}", serde_json::json!({"action":"move","number":number,"ok":true}));
+                println!("{}", serde_json::json!({"action":"move","numbers":nums,"ok":failed.is_empty(),"failed":failed}));
+                if !failed.is_empty() { std::process::exit(1); }
             }
             Action::Open { number } => {
                 sync::open_in_browser(cfg.backend, &cfg.repo, number);
@@ -332,6 +355,14 @@ fn main() -> io::Result<()> {
                         eprintln!("Warning: failed to write cache");
                     }
                 }
+                let mut detail = String::new();
+                if title.is_some() { detail.push_str("title"); }
+                if body.is_some() { if !detail.is_empty() { detail.push('|'); } detail.push_str("body"); }
+                if !add_label.is_empty() || !remove_label.is_empty() {
+                    if !detail.is_empty() { detail.push('|'); }
+                    detail.push_str(&format!("+{}-{}", add_label.join(","), remove_label.join(",")));
+                }
+                config::append_event("edit", &number.to_string(), &detail);
                 println!("{}", serde_json::json!({"action":"edit","number":number,"ok":true}));
             }
             Action::Labels => {
@@ -972,7 +1003,7 @@ mod tests {
         ]).unwrap();
         match cli.action.unwrap() {
             Action::Move { number, add_label, remove_label } => {
-                assert_eq!(number, 42);
+                assert_eq!(number, "42");
                 assert_eq!(add_label, vec!["doing"]);
                 assert_eq!(remove_label, vec!["todo"]);
             }
@@ -990,7 +1021,7 @@ mod tests {
         ]).unwrap();
         match cli.action.unwrap() {
             Action::Move { number, add_label, remove_label } => {
-                assert_eq!(number, 42);
+                assert_eq!(number, "42");
                 assert_eq!(add_label, vec!["doing", "wip"]);
                 assert_eq!(remove_label, vec!["todo", "backlog"]);
             }
@@ -1099,7 +1130,7 @@ mod tests {
         let cli = Cli::try_parse_from(&["git-kanban", "--repo", "u/r", "move", "42"]).unwrap();
         match cli.action.unwrap() {
             Action::Move { number, add_label, remove_label } => {
-                assert_eq!(number, 42);
+                assert_eq!(number, "42");
                 assert!(add_label.is_empty());
                 assert!(remove_label.is_empty());
             }

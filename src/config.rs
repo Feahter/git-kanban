@@ -33,6 +33,29 @@ pub fn cache_file_path(repo: &str) -> PathBuf {
     cache_dir().join(format!("issues-{}.json", safe_name))
 }
 
+/// Append a single event line to the event log (pipe-delimited).
+/// Format: timestamp|action|issue|detail
+/// Best-effort: failure logged to stderr, never blocks.
+pub fn append_event(action: &str, issue: &str, detail: &str) {
+    let path = cache_dir().join("events.log");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "?".into());
+    let line = format!("{}|{}|{}|{}\n", ts, action, issue, detail);
+    if let Err(e) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|f| {
+            use std::io::Write;
+            (Box::new(f) as Box<dyn Write>).write_all(line.as_bytes())
+        })
+    {
+        eprintln!("Warning: failed to write event log: {}", e);
+    }
+}
+
 pub fn load() -> Config {
     let path = config_path();
 
