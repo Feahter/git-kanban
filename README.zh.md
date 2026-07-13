@@ -17,7 +17,7 @@ gh auth login       # GitHub
 cargo install --git https://github.com/Feahter/git-kanban
 
 # 3. 验证
-git-kanban --version                 # → "git-kanban 0.1.0", exit 0
+git-kanban --version                 # → "git-kanban 1.0.0", exit 0
 git-kanban --help                    # → 子命令 + 参数列表, exit 0
 
 # 4. 测试
