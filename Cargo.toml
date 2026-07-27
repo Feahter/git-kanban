@@ -4,6 +4,11 @@ version = "1.0.0"
 edition = "2021"
 description = "Terminal kanban board for Git platforms — ratatui TUI, gh/glab CLI backend, JSON cache"
 license = "MIT"
+homepage = "https://github.com/Feahter/git-kanban"
+repository = "https://github.com/Feahter/git-kanban"
+readme = "README.md"
+keywords = ["kanban", "tui", "cli", "agent", "github", "gitlab", "terminal"]
+categories = ["command-line-utilities", "development-tools::debugging"]
 
 [dependencies]
 ratatui = "0.30"

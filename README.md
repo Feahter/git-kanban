@@ -1,7 +1,10 @@
 # git-kanban
 
-> Terminal kanban board for GitHub Issues / GitLab Issues.  
-> 858KB single binary. 4 crates. Zero runtime deps. Every TUI action has a CLI subcommand.
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
+
+> **858KB terminal kanban board for GitHub / GitLab Issues.**  
+> `<10ms` cold start. Agent-friendly JSON in/out. **No MCP server needed** — works as a native CLI tool for Claude Code, Codex, Gemini CLI, and any AI agent.
 
 [中文版](./README.zh.md)
 
@@ -116,7 +119,7 @@ The `--json --cached --fields number,title,priority` combo delivers the entire c
 
 Every write is a deterministic CLI subcommand: JSON success/failure on stdout, errors on stderr, clean exit codes. Agents chain reads, decisions, and writes into atomic workflows. `--dry-run` previews intent without side effects. The JSON cache persists across sessions, so a stateless agent picks up exactly where the last invocation left off.
 
-**JSON in, orders out.** git-kanban is the kanban board that speaks my language.
+**JSON in, orders out.** git-kanban is the kanban board that speaks your agent's language. No MCP server to install, no daemon to run — drop the binary in `$PATH` and call it. Any agent framework that has a shell tool can use it.
 
 ---
 

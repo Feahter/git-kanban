@@ -2,6 +2,8 @@
 
 Terminal kanban board for GitHub/GitLab Issues. All operations go through `gh` or `glab` CLI.
 
+**MCP note:** git-kanban works as a native CLI tool — no MCP server required. Every agent framework (Claude Code, Codex, Gemini CLI, Copilot CLI) can call it directly via shell tool. JSON in/out, clean exit codes, `--dry-run` for safe preview.
+
 ## Build & Install
 
 ```bash

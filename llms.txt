@@ -1,0 +1,84 @@
+# git-kanban
+
+> Terminal kanban board for GitHub Issues / GitLab Issues.
+> 858KB single binary. 4 crates. Zero HTTP deps. Agent-friendly JSON mode.
+
+## Quick start
+
+```bash
+cargo install --git https://github.com/Feahter/git-kanban
+# or: cargo install git-kanban
+```
+
+## Read issues (JSON)
+
+```bash
+git-kanban --json --repo owner/name
+git-kanban --json --repo owner/name --cached           # <10ms, no network
+git-kanban --json --repo owner/name --column doing       # Filter by column
+git-kanban --json --repo owner/name --fields number,title,priority  # Less tokens
+git-kanban --summary --repo owner/name                  # Per-column counts
+```
+
+## Write operations
+
+| Action | Command |
+|--------|---------|
+| Create | `git-kanban create "title" --label bug --body "desc"` |
+| Close  | `git-kanban close 42` |
+| Reopen | `git-kanban reopen 42` |
+| Comment| `git-kanban comment 42 --body "message"` |
+| Assign | `git-kanban assign 42` |
+| Move   | `git-kanban move 42 --add-label doing --remove-label todo` |
+| Edit   | `git-kanban edit 42 --title "new" --body "new"` |
+| Labels | `git-kanban labels` |
+
+## Key features
+
+- **Agent-first**: every read outputs JSON, every write is a deterministic subcommand
+- **Dual backend**: GitHub (gh CLI) + GitLab (glab CLI)
+- **Lightweight**: 858KB binary, <10ms startup, 4 crates (ratatui, crossterm, serde, clap)
+- **Zero async**: no tokio, no HTTP client, no embedded DB
+- **Offline-capable**: JSON cache persists across sessions
+- **`--dry-run`**: preview operations without side effects (safe for agents)
+
+## TUI mode
+
+```bash
+git-kanban --repo owner/name
+```
+
+5-column kanban (todo/doing/review/done/closed) with keyboard navigation, priority coloring, inline create/comment/move.
+
+## Configuration
+
+`~/.config/git-kanban/config.json` — set default repo, backend, and custom column labels.
+
+## JSON schema
+
+```json
+{
+  "repo": "owner/name",
+  "backend": "github",
+  "from_cache": false,
+  "cached_at": "",
+  "total": 1,
+  "issues": [
+    {
+      "number": 1,
+      "title": "Example issue",
+      "body": "Description",
+      "state": "Open",
+      "labels": ["bug"],
+      "assignees": ["user"],
+      "priority": "P0",
+      "created_at": "2026-07-01T10:00:00Z",
+      "updated_at": "2026-07-07T12:00:00Z"
+    }
+  ]
+}
+```
+
+## License
+
+MIT
