@@ -67,7 +67,7 @@ git-kanban move <number> --repo owner/name --add-label doing --remove-label todo
 git-kanban --refresh --repo owner/name
 
 # Cache location
-# ~/.cache/git-kanban/issues.json
+# ~/.cache/git-kanban/issues-<owner>-<name>.json
 ```
 
 ### TUI Mode (default)
@@ -91,7 +91,7 @@ src/
 - No async runtime (tokio). No HTTP client (reqwest/octocrab). No database (SQLite).
 - Errors → stderr. Data → stdout.
 - All external operations delegate to `gh` or `glab` CLI via `std::process::Command`.
-- Config → `~/.config/git-kanban/config.json`. Cache → `~/.cache/git-kanban/issues.json`.
+- Config → `~/.config/git-kanban/config.json`. Cache → `~/.cache/git-kanban/issues-<owner>-<name>.json`.
 
 ## Boundaries
 

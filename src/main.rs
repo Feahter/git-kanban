@@ -20,55 +20,55 @@ use types::Backend;
 )]
 struct Cli {
     /// Repository in owner/name format
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     repo: Option<String>,
 
     /// Multiple repositories (repeatable: --repos owner/a --repos owner/b)
-    #[arg(long)]
+    #[arg(long, global = true)]
     repos: Vec<String>,
 
     /// Use GitLab backend (glab CLI) instead of GitHub (gh CLI)
-    #[arg(long)]
+    #[arg(long, global = true)]
     gitlab: bool,
 
     /// Output issues as JSON and exit
-    #[arg(long)]
+    #[arg(long, global = true)]
     json: bool,
 
     /// Read from cache only (no network)
-    #[arg(long)]
+    #[arg(long, global = true)]
     cached: bool,
 
     /// Filter to a specific column by ID (e.g. "doing")
-    #[arg(long)]
+    #[arg(long, global = true)]
     column: Option<String>,
 
     /// Comma-separated JSON fields to include (e.g. "number,title,labels")
-    #[arg(long)]
+    #[arg(long, global = true)]
     fields: Option<String>,
 
     /// Output per-column issue count summary as JSON and exit
-    #[arg(long)]
+    #[arg(long, global = true)]
     summary: bool,
 
     /// Refresh cache and exit (for agent use)
-    #[arg(long)]
+    #[arg(long, global = true)]
     refresh: bool,
 
     /// Preview the action without executing (dry run)
-    #[arg(long)]
+    #[arg(long, global = true)]
     dry_run: bool,
 
     /// Filter issues by keyword in title or body (case-insensitive)
-    #[arg(long)]
+    #[arg(long, global = true)]
     search: Option<String>,
 
     /// Sort output by field: created or updated
-    #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(["created", "updated"]))]
+    #[arg(long, global = true, value_parser = clap::builder::PossibleValuesParser::new(["created", "updated"]))]
     sort: Option<String>,
 
     /// Omit issue body from JSON output (shorter)
-    #[arg(long)]
+    #[arg(long, global = true)]
     brief: bool,
 
     /// Action to perform (agent mode — exits after completion)
@@ -152,6 +152,84 @@ enum Action {
     Labels,
 }
 
+/// Fields an agent may select via `--fields`. Anything else is a usage error:
+/// silently dropping unknown fields produced `issues: [{}]` with exit 0.
+const VALID_FIELDS: &[&str] = &[
+    "number", "title", "body", "state", "labels", "assignees", "priority",
+    "created_at", "updated_at",
+];
+
+/// Dry-run receipt. Carries the resolved target so an agent can verify WHICH
+/// repo/backend the real call would hit — the old receipts omitted both.
+fn dry_run_receipt(action: &str, cfg: &types::Config, payload: serde_json::Value) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("action".into(), serde_json::json!(action));
+    obj.insert("dry_run".into(), serde_json::json!(true));
+    obj.insert("repo".into(), serde_json::json!(cfg.repo));
+    obj.insert(
+        "backend".into(),
+        serde_json::json!(match cfg.backend {
+            types::Backend::GitHub => "github",
+            types::Backend::GitLab => "gitlab",
+        }),
+    );
+    if let Some(map) = payload.as_object() {
+        for (k, v) in map {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+    serde_json::Value::Object(obj)
+}
+
+fn fail_usage(msg: &str) -> ! {
+    eprintln!("error: {}", msg);
+    std::process::exit(2);
+}
+
+fn validate_fields(fields: Option<&str>) -> Result<(), String> {
+    let Some(raw) = fields else { return Ok(()) };
+    let requested: Vec<&str> = raw.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    if requested.is_empty() {
+        return Err("--fields was empty".to_string());
+    }
+    let unknown: Vec<&str> = requested
+        .iter()
+        .copied()
+        .filter(|f| !VALID_FIELDS.contains(f))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "unknown field(s) in --fields: {} (valid: {})",
+            unknown.join(", "),
+            VALID_FIELDS.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// Parse "12,15,18" into numbers. Non-numeric tokens are an error, not a skip:
+/// `close 12,abc` used to close only 12 and still report ok:true.
+fn parse_numbers(raw: &str) -> Result<Vec<u64>, String> {
+    let mut nums = Vec::new();
+    let mut bad: Vec<&str> = Vec::new();
+    for tok in raw.split(',').map(|s| s.trim()) {
+        if tok.is_empty() {
+            continue;
+        }
+        match tok.parse::<u64>() {
+            Ok(n) => nums.push(n),
+            Err(_) => bad.push(tok),
+        }
+    }
+    if !bad.is_empty() {
+        return Err(format!("invalid issue number(s): {}", bad.join(", ")));
+    }
+    if nums.is_empty() {
+        return Err(format!("no issue number in '{}'", raw));
+    }
+    Ok(nums)
+}
+
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
@@ -183,15 +261,54 @@ fn main() -> io::Result<()> {
         eprintln!("Set it via --repo flag, --repos flags, or edit ~/.config/git-kanban/config.json");
         std::process::exit(1);
     }
-    // Use first repo for auth check and as default action target
-    let _first_repo = repos.first().cloned().unwrap_or_else(|| cfg.repo.clone());
 
-    // Check CLI auth
-    if let Err(e) = sync::check_cli_auth(cfg.backend) {
-        eprintln!("Error: {}", e);
-        let cmd = cfg.backend.cmd();
-        eprintln!("Run '{} auth login' first.", cmd);
-        std::process::exit(1);
+    // ── Validate filter arguments before any subprocess/network work ──
+    // A filter the tool cannot honour must fail loudly. Silently ignoring it
+    // (the old behaviour) lets an agent believe it filtered when it did not.
+    if let Err(e) = validate_fields(cli.fields.as_deref()) {
+        fail_usage(&e);
+    }
+    if let Some(ref col) = cli.column {
+        if !cfg.columns.iter().any(|c| c.id == *col) {
+            let ids: Vec<&str> = cfg.columns.iter().map(|c| c.id.as_str()).collect();
+            fail_usage(&format!("unknown column '{}' (valid: {})", col, ids.join(", ")));
+        }
+    }
+
+    // ── Resolve the WRITE target explicitly ──
+    // Previously the write path always used cfg.repo, so
+    // `--repos a/b --repos c/d close 5` closed #5 in the *config* repo while
+    // reporting ok:true. Ambiguity must be an error, never a guess.
+    if cli.action.is_some() {
+        let target = if let Some(ref repo) = cli.repo {
+            repo.clone()
+        } else if cli.repos.len() == 1 {
+            cli.repos[0].clone()
+        } else if cli.repos.len() > 1 {
+            fail_usage(&format!(
+                "write operations need exactly one repo, got {} (--repos {}); pass --repo <owner/name>",
+                cli.repos.len(),
+                cli.repos.join(" ")
+            ));
+        } else if !cfg.repo.is_empty() {
+            cfg.repo.clone()
+        } else if let Some(first) = repos.first() {
+            first.clone()
+        } else {
+            fail_usage("no repository configured for this write operation");
+        };
+        cfg.repo = target;
+    }
+
+    // Check CLI auth — skipped for --dry-run: a preview has no side effect and
+    // must stay usable when credentials are missing.
+    if !cli.dry_run {
+        if let Err(e) = sync::check_cli_auth(cfg.backend) {
+            eprintln!("Error: {}", e);
+            let cmd = cfg.backend.cmd();
+            eprintln!("Run '{} auth login' first.", cmd);
+            std::process::exit(1);
+        }
     }
 
     // Execute action (agent mode) — runs first so it's explicit
@@ -199,7 +316,7 @@ fn main() -> io::Result<()> {
         match action {
             Action::Create { title, body, label } => {
                 if cli.dry_run {
-                    println!("{}", serde_json::json!({"action":"create","title":title,"labels":label,"dry_run":true}));
+                    println!("{}", dry_run_receipt("create", &cfg, serde_json::json!({"title":title,"body":body,"labels":label})));
                     return Ok(());
                 }
                 match sync::create_issue(cfg.backend, &cfg.repo, &title, body.as_deref(), &label) {
@@ -216,13 +333,9 @@ fn main() -> io::Result<()> {
                 }
             }
             Action::Close { number } => {
-                let nums: Vec<u64> = number.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-                if nums.is_empty() {
-                    eprintln!("Error: invalid issue number(s): '{}'", number);
-                    std::process::exit(1);
-                }
+                let nums = parse_numbers(&number).unwrap_or_else(|e| fail_usage(&e));
                 if cli.dry_run {
-                    println!("{}", serde_json::json!({"action":"close","numbers":nums,"dry_run":true}));
+                    println!("{}", dry_run_receipt("close", &cfg, serde_json::json!({"numbers":nums})));
                     return Ok(());
                 }
                 let mut failed = Vec::new();
@@ -244,13 +357,9 @@ fn main() -> io::Result<()> {
                 if !failed.is_empty() { std::process::exit(1); }
             }
             Action::Reopen { number } => {
-                let nums: Vec<u64> = number.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-                if nums.is_empty() {
-                    eprintln!("Error: invalid issue number(s): '{}'", number);
-                    std::process::exit(1);
-                }
+                let nums = parse_numbers(&number).unwrap_or_else(|e| fail_usage(&e));
                 if cli.dry_run {
-                    println!("{}", serde_json::json!({"action":"reopen","numbers":nums,"dry_run":true}));
+                    println!("{}", dry_run_receipt("reopen", &cfg, serde_json::json!({"numbers":nums})));
                     return Ok(());
                 }
                 let mut failed = Vec::new();
@@ -273,7 +382,7 @@ fn main() -> io::Result<()> {
             }
             Action::Comment { number, body } => {
                 if cli.dry_run {
-                    println!("{}", serde_json::json!({"action":"comment","number":number,"body":body,"dry_run":true}));
+                    println!("{}", dry_run_receipt("comment", &cfg, serde_json::json!({"number":number,"body":body})));
                     return Ok(());
                 }
                 if let Err(e) = sync::add_comment(cfg.backend, &cfg.repo, number, &body) {
@@ -291,7 +400,7 @@ fn main() -> io::Result<()> {
             Action::Assign { number, user } => {
                 if cli.dry_run {
                     let target = user.as_deref().unwrap_or("self");
-                    println!("{}", serde_json::json!({"action":"assign","number":number,"user":target,"dry_run":true}));
+                    println!("{}", dry_run_receipt("assign", &cfg, serde_json::json!({"number":number,"user":target})));
                     return Ok(());
                 }
                 let result = match user {
@@ -309,13 +418,9 @@ fn main() -> io::Result<()> {
                 println!("{}", serde_json::json!({"action":"assign","number":number,"ok":true}));
             }
             Action::Move { number, add_label, remove_label } => {
-                let nums: Vec<u64> = number.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-                if nums.is_empty() {
-                    eprintln!("Error: invalid issue number(s): '{}'", number);
-                    std::process::exit(1);
-                }
+                let nums = parse_numbers(&number).unwrap_or_else(|e| fail_usage(&e));
                 if cli.dry_run {
-                    println!("{}", serde_json::json!({"action":"move","numbers":nums,"add_label":add_label,"remove_label":remove_label,"dry_run":true}));
+                    println!("{}", dry_run_receipt("move", &cfg, serde_json::json!({"numbers":nums,"add_label":add_label,"remove_label":remove_label})));
                     return Ok(());
                 }
                 let mut failed = Vec::new();
@@ -339,12 +444,17 @@ fn main() -> io::Result<()> {
                 if !failed.is_empty() { std::process::exit(1); }
             }
             Action::Open { number } => {
+                let url = sync::issue_url(cfg.backend, &cfg.repo, number);
+                if cli.dry_run {
+                    println!("{}", dry_run_receipt("open", &cfg, serde_json::json!({"number":number,"url":url})));
+                    return Ok(());
+                }
                 sync::open_in_browser(cfg.backend, &cfg.repo, number);
-                println!("{}", serde_json::json!({"action":"open","number":number,"ok":true}));
+                println!("{}", serde_json::json!({"action":"open","number":number,"url":url,"ok":true}));
             }
             Action::Edit { number, title, body, add_label, remove_label } => {
                 if cli.dry_run {
-                    println!("{}", serde_json::json!({"action":"edit","number":number,"title":title,"body":body,"add_label":add_label,"remove_label":remove_label,"dry_run":true}));
+                    println!("{}", dry_run_receipt("edit", &cfg, serde_json::json!({"number":number,"title":title,"body":body,"add_label":add_label,"remove_label":remove_label})));
                     return Ok(());
                 }
                 if let Err(e) = sync::edit_issue(cfg.backend, &cfg.repo, number, title.as_deref(), body.as_deref(), &add_label, &remove_label) {
@@ -366,6 +476,10 @@ fn main() -> io::Result<()> {
                 println!("{}", serde_json::json!({"action":"edit","number":number,"ok":true}));
             }
             Action::Labels => {
+                if cli.dry_run {
+                    println!("{}", dry_run_receipt("labels", &cfg, serde_json::json!({})));
+                    return Ok(());
+                }
                 let labels = sync::list_labels(cfg.backend, &cfg.repo);
                 match labels {
                     Ok(labels) => {
@@ -414,7 +528,11 @@ fn main() -> io::Result<()> {
                 }
             };
             let count = issues.len();
-            println!("Cached {} issues from {}", count, repo);
+            if cli.json {
+                println!("{}", serde_json::json!({"action":"refresh","repo":repo,"count":count,"ok":true}));
+            } else {
+                println!("Cached {} issues from {}", count, repo);
+            }
         }
         return Ok(());
     }
@@ -618,7 +736,11 @@ fn main() -> io::Result<()> {
     // Refresh mode: cache was already updated above, just confirm
     if cli.refresh {
         let count = issues.len();
-        println!("Cached {} issues from {}", count, cfg.repo);
+        if cli.json {
+            println!("{}", serde_json::json!({"action":"refresh","repo":cfg.repo,"count":count,"ok":true}));
+        } else {
+            println!("Cached {} issues from {}", count, cfg.repo);
+        }
         return Ok(());
     }
 

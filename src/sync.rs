@@ -129,11 +129,15 @@ pub fn reopen_issue(backend: Backend, repo: &str, number: u64) -> Result<(), Str
     run_cli_cmd(cmd, &["issue", "reopen", &number.to_string(), "--repo", repo])
 }
 
-pub fn open_in_browser(backend: Backend, repo: &str, number: u64) {
-    let url = match backend {
+pub fn issue_url(backend: Backend, repo: &str, number: u64) -> String {
+    match backend {
         Backend::GitHub => format!("https://github.com/{}/issues/{}", repo, number),
         Backend::GitLab => format!("https://gitlab.com/{}/-/issues/{}", repo, number),
-    };
+    }
+}
+
+pub fn open_in_browser(backend: Backend, repo: &str, number: u64) {
+    let url = issue_url(backend, repo, number);
     let result = if cfg!(target_os = "macos") {
         Command::new("open").arg(&url).output()
     } else if cfg!(target_os = "linux") {

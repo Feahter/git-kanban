@@ -3,7 +3,7 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
 
-> **858KB terminal kanban board for GitHub / GitLab Issues.**  
+> **1.05MB terminal kanban board for GitHub / GitLab Issues.**  
 > `<10ms` cold start. Agent-friendly JSON in/out. **No MCP server needed** — works as a native CLI tool for Claude Code, Codex, Gemini CLI, and any AI agent.
 
 [中文版](./README.zh.md)
@@ -107,7 +107,7 @@ git-kanban --dry-run move 42 --add-label doing --remove-label todo
 
 ```bash
 git-kanban --refresh --repo owner/name     # Force re-fetch
-git-kanban --refresh --quiet --repo ...    # Silent refresh
+git-kanban --refresh --json --repo ...     # Machine-readable refresh receipt
 git-kanban --json --cached --repo ...      # Read cache, skip network
 ```
 
@@ -150,7 +150,25 @@ Backend: `"github"` or `"gitlab"`. Each column maps labels → an issue with any
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Error (auth, args, API failure) |
+| 1 | Runtime error (auth, provider/API failure) |
+| 2 | Usage error (unknown flag, unknown `--fields`/`--column` value, ambiguous write target, malformed issue number) |
+
+Machine-readable failure means: on any non-zero exit, stdout is empty and stderr
+carries the reason. Writes answer with JSON on stdout (`{"action":…,"ok":…}`).
+
+## Agent contract
+
+Four invariants the CLI keeps, each pinned by a test in `tests/cli_test.rs`:
+
+1. **Flags work before *and* after the subcommand** — `git-kanban close 1 --repo o/n` is valid.
+2. **A write targets exactly one repo.** `--repos a --repos b close 5` exits 2 instead of
+   guessing (it used to write to the config repo and report `ok:true`).
+3. **An unusable filter fails.** Unknown `--fields` / `--column` values exit 2 with the valid
+   set; they never degrade into "return everything, exit 0".
+4. **`--dry-run` needs no credentials** and its receipt echoes the resolved `repo` and `backend`,
+   so an agent can verify the target before committing.
+
+Batch numbers (`close 12,15`) are parsed strictly: a non-numeric token is a usage error, not a skip.
 
 ---
 
@@ -170,7 +188,6 @@ Backend: `"github"` or `"gitlab"`. Each column maps labels → an issue with any
 | `--refresh` | Force cache refresh |
 | `--gitlab` | Use GitLab backend |
 | `--dry-run` | Preview write, no side effects |
-| `--quiet` | Suppress non-essential output |
 | `create` | Create issue |
 | `close <N>` | Close issue(s) |
 | `reopen <N>` | Reopen issue(s) |
@@ -264,7 +281,7 @@ git-kanban move 42 --add-label doing                        # ❌ stays in both 
 ## Design
 
 ```
-4 crates: ratatui, crossterm, serde, clap
+5 direct deps: ratatui, crossterm, serde, serde_json, clap
 No tokio  ❌    No reqwest  ❌    No SQLite  ❌    No chrono  ❌
 
 Read:  JSON cache → render → background sync
@@ -274,9 +291,9 @@ Auth:  Inherits ~/.config/gh/ or ~/.config/glab/ tokens
 
 | Metric | Value |
 |--------|-------|
-| Binary | 858 KB |
+| Binary | 1.05 MB |
 | Start | <10ms |
-| Dependencies | 4 crates |
+| Dependencies | 5 direct deps |
 
 ---
 

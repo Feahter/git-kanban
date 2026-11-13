@@ -1,7 +1,7 @@
 # git-kanban
 
 > Terminal kanban board for GitHub Issues / GitLab Issues.
-> 858KB single binary. 4 crates. Zero HTTP deps. Agent-friendly JSON mode.
+> 1.05MB single binary. 5 direct deps. Zero HTTP deps. Agent-friendly JSON mode.
 
 ## Quick start
 
@@ -37,7 +37,7 @@ git-kanban --summary --repo owner/name                  # Per-column counts
 
 - **Agent-first**: every read outputs JSON, every write is a deterministic subcommand
 - **Dual backend**: GitHub (gh CLI) + GitLab (glab CLI)
-- **Lightweight**: 858KB binary, <10ms startup, 4 crates (ratatui, crossterm, serde, clap)
+- **Lightweight**: 1.05MB binary, <10ms startup, 5 direct deps (ratatui, crossterm, serde, serde_json, clap)
 - **Zero async**: no tokio, no HTTP client, no embedded DB
 - **Offline-capable**: JSON cache persists across sessions
 - **`--dry-run`**: preview operations without side effects (safe for agents)

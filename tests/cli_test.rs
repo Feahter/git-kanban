@@ -343,3 +343,72 @@ fn run_json_summary(repo: &str, extra_args: &[&str]) -> serde_json::Value {
     let stdout = String::from_utf8_lossy(&output.stdout);
     serde_json::from_str(&stdout).expect("stdout should be valid JSON")
 }
+
+
+// ── Agent contract tests (no auth, no network) ──
+//
+// These pin the failure modes that made the tool unusable for agents:
+// documented invocations that exit 2, silently ignored filters, and batch
+// numbers that were dropped without a word. `--dry-run` is used so the auth
+// gate (which is skipped in dry-run) never needs credentials.
+
+fn run_synthetic(args: &[&str]) -> std::process::Output {
+    Command::new(binary_path())
+        .args(args)
+        .output()
+        .expect("failed to execute binary")
+}
+
+#[test]
+fn test_global_flags_accepted_after_subcommand() {
+    // `git-kanban close 1 --repo X` is the form every doc uses.
+    let out = run_synthetic(&["close", "1", "--repo", "o/n", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(0),
+        "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("dry-run must emit JSON");
+    assert_eq!(v["action"], "close");
+}
+
+#[test]
+fn test_dry_run_receipt_carries_target() {
+    // An agent must be able to verify WHICH repo the write would hit.
+    let out = run_synthetic(&["--repo", "o/n", "close", "1", "--dry-run"]);
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("valid JSON");
+    assert_eq!(v["repo"], "o/n");
+    assert_eq!(v["backend"], "github");
+    assert_eq!(v["dry_run"], true);
+}
+
+#[test]
+fn test_ambiguous_write_target_is_rejected() {
+    // Two repos + a write used to silently write to the CONFIG repo.
+    let out = run_synthetic(&["--repos", "a/one", "--repos", "b/two", "close", "5", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(2), "ambiguous write target must be a usage error");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("exactly one repo"));
+}
+
+#[test]
+fn test_non_numeric_issue_number_rejected() {
+    // `close 12,abc` used to close only 12 and report ok:true.
+    let out = run_synthetic(&["close", "12,abc", "--repo", "o/n", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("abc"));
+}
+
+#[test]
+fn test_unknown_field_rejected() {
+    // `--fields zzz` used to emit `issues: [{}]` with exit 0.
+    let out = run_synthetic(&["--json", "--fields", "number,zzz", "--repo", "o/n"]);
+    assert_eq!(out.status.code(), Some(2), "unknown field must be a usage error");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("zzz"));
+}
+
+#[test]
+fn test_unknown_column_rejected() {
+    // `--column bogus` used to return every issue, unfiltered, exit 0.
+    let out = run_synthetic(&["--json", "--column", "nosuch", "--repo", "o/n"]);
+    assert_eq!(out.status.code(), Some(2), "unknown column must be a usage error");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("nosuch"));
+}

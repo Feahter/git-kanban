@@ -1,7 +1,7 @@
 # git-kanban
 
 > 终端看板工具，支持 GitHub/GitLab Issues。
-> 858KB 单文件二进制，4 个依赖 crate。每个 TUI 操作都有对应的 CLI 子命令（Agent 友好）。
+> 1.05MB 单文件二进制，5 个直接依赖。所有写操作都有对应的 CLI 子命令（Agent 友好）。
 
 [English](./README.md)
 
@@ -104,7 +104,7 @@ git-kanban --dry-run move 42 --add-label doing --remove-label todo
 
 ```bash
 git-kanban --refresh --repo owner/name     # 强制重新拉取
-git-kanban --refresh --quiet --repo ...    # 静默刷新
+git-kanban --refresh --json --repo ...     # 机器可读的刷新回执
 git-kanban --json --cached --repo ...      # 仅读缓存，不走网络
 ```
 
@@ -157,7 +157,6 @@ git-kanban --json --cached --repo ...      # 仅读缓存，不走网络
 | `--refresh` | 强制刷新缓存 |
 | `--gitlab` | 使用 GitLab 后端 |
 | `--dry-run` | 预览写入操作，无副作用 |
-| `--quiet` | 压制非必要输出 |
 | `create` | 创建 issue |
 | `close <N>` | 关闭 issue |
 | `reopen <N>` | 重开 issue |
@@ -261,7 +260,7 @@ git-kanban move 42 --add-label doing                        # ❌ issue 会在�
 
 | 指标 | 值 |
 |------|-----|
-| 二进制体积 | 858 KB |
+| 二进制体积 | 1.05 MB |
 | 冷启动 | <10ms |
 | 依赖 | 4 crate |
 
